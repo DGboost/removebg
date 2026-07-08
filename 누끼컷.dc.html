@@ -564,10 +564,26 @@ class Component extends DCLogic {
   async prepLasso() {
     const sc = this.state.editorImage; if (!sc) return;
     try {
-      const img = await this.loadImage(sc.photo);
+      // When a result already exists (from click eraser, auto, or an earlier
+      // lasso pass), use THAT as the working raster — it carries real
+      // transparency from the prior cut, which is exactly what the alpha-based
+      // fast path in refineLassoMask/refineAddMask needs to recognize object
+      // boundaries. Using the original photo (no alpha) here was why magnetic
+      // lasso fell back to the raw drawn shape every time after click eraser.
+      const rasterSrc = this.state.resultSrc || sc.photo;
+      const img = await this.loadImage(rasterSrc);
       const { c, W, H } = this.mkCanvas(img);
       this._work = { W, H };
       this._raster = c;
+      // keep the original photo around too — revealFromOriginal needs it to
+      // recover real pixel colors when adding areas that were previously cut.
+      if (this.state.resultSrc) {
+        const origImg = await this.loadImage(sc.photo);
+        const { c: origC } = this.mkCanvas(origImg);
+        this._origRaster = origC;
+      } else {
+        this._origRaster = c;
+      }
       const sc2 = document.createElement('canvas'); sc2.width = W; sc2.height = H;
       this._selCanvas = sc2; this._selCtx = sc2.getContext('2d', { willReadFrequently: true });
       // touching up a result from another tool (or an earlier lasso stroke)?
@@ -818,6 +834,48 @@ class Component extends DCLogic {
     cctx.drawImage(this._raster, minX, minY, bw, bh, 0, 0, bw, bh);
     const px = cctx.getImageData(0, 0, bw, bh).data;
 
+    // ALPHA FAST PATH: when the working raster already has transparency (e.g.
+    // after click eraser or a prior lasso pass), the alpha channel IS the true
+    // object/background boundary — far more reliable than color guessing.
+    // Inside the drawn loop: keep pixels that are opaque (object), trim pixels
+    // that are transparent AND connected to the outside (background). This is
+    // the same principle as the color flood-fill below, but using alpha directly.
+    {
+      let lowA = 0, highA = 0;
+      const total = bw * bh;
+      for (let i = 0; i < total; i++) {
+        const a = px[i * 4 + 3];
+        if (a < 30) lowA++; else if (a > 220) highA++;
+      }
+      if (lowA > total * 0.03 && highA > total * 0.03 && (lowA + highA) / total > 0.6) {
+        // flood-fill transparent (background) pixels from the crop border inward
+        const reach = new Uint8Array(total);
+        const stack = [];
+        const seed = (i) => { if (px[i * 4 + 3] < 30 && !reach[i]) { reach[i] = 1; stack.push(i); } };
+        for (let x = 0; x < bw; x++) { seed(x); seed((bh - 1) * bw + x); }
+        for (let y = 0; y < bh; y++) { seed(y * bw); seed(y * bw + bw - 1); }
+        while (stack.length) {
+          const i = stack.pop(), x = i % bw, y = (i / bw) | 0;
+          if (x > 0) seed(i - 1); if (x < bw - 1) seed(i + 1);
+          if (y > 0) seed(i - bw); if (y < bh - 1) seed(i + bw);
+        }
+        const od = cctx.createImageData(bw, bh);
+        let kept = 0, rawCount = 0;
+        for (let i = 0; i < total; i++) {
+          const inRaw = rawData[i * 4 + 3] > 40; if (inRaw) rawCount++;
+          const on = inRaw && !reach[i];
+          od.data[i * 4] = 255; od.data[i * 4 + 1] = 255; od.data[i * 4 + 2] = 255; od.data[i * 4 + 3] = on ? 255 : 0;
+          if (on) kept++;
+        }
+        if (rawCount > 0 && kept / rawCount < 0.15) return { mask: raw, recognized: false };
+        const tmp = document.createElement('canvas'); tmp.width = bw; tmp.height = bh;
+        tmp.getContext('2d').putImageData(od, 0, 0);
+        const out = document.createElement('canvas'); out.width = W; out.height = H;
+        out.getContext('2d').drawImage(tmp, minX, minY);
+        return { mask: out, recognized: true };
+      }
+    }
+
     // background reference = robust (trimmed) average of the margin ring around
     // the drawn loop — same estimator the edge classifier uses.
     const marginIdx = [];
@@ -882,21 +940,136 @@ class Component extends DCLogic {
     out.getContext('2d').drawImage(tmp, minX, minY);
     return { mask: out, recognized: true };
   }
+  // SUB (exclude): the user circles a region to TRIM. We need to recognize
+// which pixels inside the loop are background (to erase) vs object (to keep).
+// This mirrors refineAddMask's approach but in reverse: classify background
+// pixels and erase only those, keeping object pixels intact. Without this,
+// sub uses refineLassoMask + subtractCanvas which can produce rectangle-shaped
+// erasure zones when the alpha fast path returns a bbox-sized zone.
+  refineSubMask(pts) {
+    const { W, H } = this._work;
+    const raw = this.rawLassoMask(pts);
+    if (!this._raster || !this.state.magnetic) return { mask: raw, recognized: false };
+    let bx0 = W, by0 = H, bx1 = 0, by1 = 0;
+    pts.forEach(p => { const X = p[0] * W, Y = p[1] * H; bx0 = Math.min(bx0, X); by0 = Math.min(by0, Y); bx1 = Math.max(bx1, X); by1 = Math.max(by1, Y); });
+    const loopW = Math.max(1, bx1 - bx0), loopH = Math.max(1, by1 - by0);
+    const padX = Math.max(10, loopW * 0.18), padY = Math.max(10, loopH * 0.18);
+    const minX = Math.max(0, Math.floor(bx0 - padX)), minY = Math.max(0, Math.floor(by0 - padY));
+    const maxX = Math.min(W, Math.ceil(bx1 + padX)), maxY = Math.min(H, Math.ceil(by1 + padY));
+    const bw = Math.max(1, Math.round(maxX - minX)), bh = Math.max(1, Math.round(maxY - minY));
+
+    const rc = document.createElement('canvas'); rc.width = bw; rc.height = bh;
+    rc.getContext('2d').drawImage(raw, minX, minY, bw, bh, 0, 0, bw, bh);
+    const rawData = rc.getContext('2d').getImageData(0, 0, bw, bh).data;
+
+    const crop = document.createElement('canvas'); crop.width = bw; crop.height = bh;
+    const cctx = crop.getContext('2d', { willReadFrequently: true });
+    cctx.drawImage(this._raster, minX, minY, bw, bh, 0, 0, bw, bh);
+    const px = cctx.getImageData(0, 0, bw, bh).data;
+    const total = bw * bh;
+
+    // ALPHA FAST PATH: when the raster has transparency, we can directly
+    // identify background pixels. Unlike add (which flood-fills from outside
+    // to preserve interior object areas), sub should erase ALL background
+    // within the loop — including interior holes that don't connect to the
+    // outside. So we erase: (a) transparent pixels inside the loop, AND
+    // (b) opaque pixels inside the loop whose color matches the surrounding
+    // background (catches holes the AI incorrectly filled as object).
+    {
+      let lowA = 0, highA = 0;
+      for (let i = 0; i < total; i++) {
+        const a = px[i * 4 + 3];
+        if (a < 30) lowA++; else if (a > 220) highA++;
+      }
+      if (lowA > total * 0.03 && highA > total * 0.03 && (lowA + highA) / total > 0.6) {
+        // Estimate background color from transparent pixels in the margin
+        // (outside the loop but inside the crop).
+        let br = 0, bg = 0, bb = 0, bN = 0;
+        for (let i = 0; i < total; i++) {
+          if (rawData[i * 4 + 3] <= 40 && px[i * 4 + 3] < 30) {
+            br += px[i * 4]; bg += px[i * 4 + 1]; bb += px[i * 4 + 2]; bN++;
+          }
+        }
+        if (bN > 0) { br /= bN; bg /= bN; bb /= bN; }
+        const tol = this.effTol();
+        // erase mask = pixels inside the loop that are either transparent
+        // OR match the background color (catches filled-in interior holes)
+        const od = cctx.createImageData(bw, bh);
+        for (let i = 0; i < total; i++) {
+          const inRaw = rawData[i * 4 + 3] > 40;
+          if (!inRaw) continue;
+          const a = px[i * 4 + 3];
+          const rr = px[i * 4], gg = px[i * 4 + 1], bv = px[i * 4 + 2];
+          const dist = bN > 0 ? Math.sqrt((rr - br) ** 2 + (gg - bg) ** 2 + (bv - bb) ** 2) : 999;
+          const isBg = a < 30 || (bN > 0 && dist <= tol);
+          od.data[i * 4] = 255; od.data[i * 4 + 1] = 255; od.data[i * 4 + 2] = 255;
+          od.data[i * 4 + 3] = isBg ? 255 : 0;
+        }
+        const tmp = document.createElement('canvas'); tmp.width = bw; tmp.height = bh;
+        tmp.getContext('2d').putImageData(od, 0, 0);
+        const out = document.createElement('canvas'); out.width = W; out.height = H;
+        out.getContext('2d').drawImage(tmp, minX, minY);
+        return { mask: out, recognized: true };
+      }
+    }
+    // COLOR PATH: estimate background from the margin ring, then erase pixels
+    // inside the loop that match the background color.
+    const marginIdx = [];
+    for (let i = 0; i < total; i++) { if (rawData[i * 4 + 3] <= 40) marginIdx.push(i); }
+    if (marginIdx.length < Math.max(20, total * 0.02)) return { mask: raw, recognized: false };
+    const stepN = Math.max(1, Math.floor(marginIdx.length / 600));
+    let samples = [];
+    for (let k = 0; k < marginIdx.length; k += stepN) { const i = marginIdx[k]; samples.push([px[i * 4], px[i * 4 + 1], px[i * 4 + 2]]); }
+    let br = 0, bg = 0, bb = 0;
+    for (const sm of samples) { br += sm[0]; bg += sm[1]; bb += sm[2]; }
+    br /= samples.length; bg /= samples.length; bb /= samples.length;
+    let pool = samples;
+    for (let it = 0; it < 3; it++) {
+      const ranked = pool.map(sm => ({ sm, d: (sm[0] - br) ** 2 + (sm[1] - bg) ** 2 + (sm[2] - bb) ** 2 }));
+      ranked.sort((a, b) => a.d - b.d);
+      pool = ranked.slice(0, Math.max(8, Math.floor(ranked.length * 0.65))).map(w => w.sm);
+      br = 0; bg = 0; bb = 0;
+      for (const sm of pool) { br += sm[0]; bg += sm[1]; bb += sm[2]; }
+      br /= pool.length; bg /= pool.length; bb /= pool.length;
+    }
+    let close = 0;
+    for (const i of marginIdx) {
+      const rr = px[i * 4], gg = px[i * 4 + 1], bv = px[i * 4 + 2];
+      if (Math.sqrt((rr - br) ** 2 + (gg - bg) ** 2 + (bv - bb) ** 2) < 55) close++;
+    }
+    if (close / marginIdx.length < 0.45) return { mask: raw, recognized: false };
+
+    const tol = this.effTol();
+    const od = cctx.createImageData(bw, bh);
+    for (let i = 0; i < total; i++) {
+      const inRaw = rawData[i * 4 + 3] > 40;
+      const rr = px[i * 4], gg = px[i * 4 + 1], bv = px[i * 4 + 2];
+      const dist = Math.sqrt((rr - br) ** 2 + (gg - bg) ** 2 + (bv - bb) ** 2);
+      // erase = inside loop AND matches background color
+      const on = inRaw && dist <= tol;
+      od.data[i * 4] = 255; od.data[i * 4 + 1] = 255; od.data[i * 4 + 2] = 255; od.data[i * 4 + 3] = on ? 255 : 0;
+    }
+    const tmp = document.createElement('canvas'); tmp.width = bw; tmp.height = bh;
+    tmp.getContext('2d').putImageData(od, 0, 0);
+    const out = document.createElement('canvas'); out.width = W; out.height = H;
+    out.getContext('2d').drawImage(tmp, minX, minY);
+    return { mask: out, recognized: true };
+  }
   commitLasso() {
     const pts = this.state.lassoPts;
     if (pts.length < 3 || !this._work || !this._selCtx) { this.setState({ lassoPts: [] }); return; }
     const { W, H } = this._work, ctx = this._selCtx, op = this.state.lassoOp;
     let mask, zone, recognized;
     if (op === 'add') { const r = this.refineAddMask(pts); mask = zone = r.mask; recognized = r.recognized; }
+    else if (op === 'sub') { const r = this.refineSubMask(pts); mask = r.mask; zone = mask; recognized = r.recognized; }
     else if (this.state.magnetic) { const r = this.refineLassoMask(pts); mask = r.mask; zone = r.zone; recognized = r.recognized; }
     else { mask = zone = this.rawLassoMask(pts); recognized = false; }
     this._strokeMask = mask; this._strokeZone = zone; this._strokeOp = op; this._strokeRecognized = recognized;
+    // For sub: mask is already the "what to erase" (background pixels within
+    // the loop), so we erase it directly. For add/new: mask is "what to keep"
+    // (object pixels), so we draw it to add to the selection.
     if (op === 'sub') {
-      // exclude should remove the background-like part of what was circled,
-      // not the recognized object itself — when we couldn't recognize anything
-      // reliably, fall back to erasing exactly what was drawn.
-      const erase = recognized ? this.subtractCanvas(zone, mask, W, H) : mask;
-      ctx.globalCompositeOperation = 'destination-out'; ctx.drawImage(erase, 0, 0); ctx.globalCompositeOperation = 'source-over';
+      ctx.globalCompositeOperation = 'destination-out'; ctx.drawImage(mask, 0, 0); ctx.globalCompositeOperation = 'source-over';
     }
     else { ctx.globalCompositeOperation = 'source-over'; ctx.drawImage(mask, 0, 0); }
     const { url, has } = this.buildSelOverlay();
@@ -916,9 +1089,11 @@ class Component extends DCLogic {
     const baseImg = await this.loadImage(this.baseSrc());
     const { c, x, W, H } = this.mkCanvas(baseImg);
     const revealFromOriginal = async () => {
-      const sc = this.state.editorImage;
-      const origImg = await this.loadImage(sc.photo);
-      const { c: oc } = this.mkCanvas(origImg);
+      // _origRaster is always the original photo (set in prepLasso), even when
+      // _raster is the current result with transparency — reveal real colors
+      // from the original when adding areas back.
+      const oc = this._origRaster || this._raster;
+      if (!oc) return;
       const reveal = document.createElement('canvas'); reveal.width = W; reveal.height = H;
       const rctx = reveal.getContext('2d');
       rctx.drawImage(oc, 0, 0, W, H);
@@ -933,8 +1108,10 @@ class Component extends DCLogic {
       this.inpaintRemainingHoles(x, W, H, mask);
     };
     if (op === 'sub') {
-      const erase = recognized ? this.subtractCanvas(zone, mask, W, H) : mask;
-      x.globalCompositeOperation = 'destination-out'; x.drawImage(erase, 0, 0, W, H); x.globalCompositeOperation = 'source-over';
+      // refineSubMask already returns the erase mask (background pixels to
+      // remove), so erase directly. When not recognized, mask is the raw drawn
+      // shape — erase that as-is (the user's explicit intent).
+      x.globalCompositeOperation = 'destination-out'; x.drawImage(mask, 0, 0, W, H); x.globalCompositeOperation = 'source-over';
     } else if (op === 'new' && !hadPriorResult) {
       x.globalCompositeOperation = 'destination-in'; x.drawImage(mask, 0, 0, W, H); x.globalCompositeOperation = 'source-over';
     } else if (op === 'new') {
