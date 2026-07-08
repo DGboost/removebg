@@ -356,7 +356,7 @@ button{font-family:inherit;cursor:pointer;border:none;background:none;color:inhe
   </div>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1280,&quot;height&quot;:820},&quot;accent&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#3d5afe&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;options&quot;:[&quot;#3d5afe&quot;,&quot;#111827&quot;,&quot;#0f9d78&quot;,&quot;#e0553d&quot;,&quot;#7c4dff&quot;],&quot;section&quot;:&quot;브랜드&quot;},&quot;appName&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;누끼컷&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;브랜드&quot;},&quot;autoTol&quot;:{&quot;editor&quot;:&quot;range&quot;,&quot;default&quot;:30,&quot;min&quot;:20,&quot;max&quot;:130,&quot;step&quot;:5,&quot;unit&quot;:&quot;px&quot;,&quot;tsType&quot;:&quot;number&quot;,&quot;section&quot;:&quot;엔진&quot;},&quot;model&quot;:{&quot;editor&quot;:&quot;select&quot;,&quot;default&quot;:&quot;BiRefNet_lite&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;options&quot;:[&quot;BiRefNet_lite&quot;,&quot;ormbg&quot;,&quot;RMBG-1.4&quot;],&quot;section&quot;:&quot;엔진&quot;}}">
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1280,&quot;height&quot;:820},&quot;accent&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#3d5afe&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;options&quot;:[&quot;#3d5afe&quot;,&quot;#111827&quot;,&quot;#0f9d78&quot;,&quot;#e0553d&quot;,&quot;#7c4dff&quot;],&quot;section&quot;:&quot;브랜드&quot;},&quot;appName&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;누끼컷&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;브랜드&quot;},&quot;autoTol&quot;:{&quot;editor&quot;:&quot;range&quot;,&quot;default&quot;:30,&quot;min&quot;:20,&quot;max&quot;:130,&quot;step&quot;:5,&quot;unit&quot;:&quot;px&quot;,&quot;tsType&quot;:&quot;number&quot;,&quot;section&quot;:&quot;엔진&quot;},&quot;model&quot;:{&quot;editor&quot;:&quot;select&quot;,&quot;default&quot;:&quot;ormbg&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;options&quot;:[&quot;BiRefNet_lite&quot;,&quot;ormbg&quot;,&quot;RMBG-1.4&quot;],&quot;section&quot;:&quot;엔진&quot;}}">
 class Component extends DCLogic {
   state = {
     view: 'home',
@@ -507,6 +507,14 @@ class Component extends DCLogic {
     'ormbg': 'ORMBG',
     'RMBG-1.4': 'RMBG-1.4'
   };
+  // dtype per model: fp16 halves memory vs fp32. BiRefNet_lite has no q4
+  // variant, so fp16 is the lightest option. ormbg has q4 (44MB) which is
+  // the safest for memory-constrained browsers. RMBG-1.4 uses fp16.
+  static MODEL_DTYPES = {
+    'BiRefNet_lite': 'fp16',
+    'ormbg': 'q4',
+    'RMBG-1.4': 'fp16'
+  };
   loadT() {
     if (this._T) return Promise.resolve(this._T);
     if (window.__nkT) { this._T = window.__nkT; return Promise.resolve(this._T); }
@@ -527,7 +535,7 @@ class Component extends DCLogic {
   // Cache one pipeline per model name so switching models doesn't re-download
   // the same model if the user switches back.
   async ensureModel() {
-    const modelKey = this.props.model || 'BiRefNet_lite';
+    const modelKey = this.props.model || 'ormbg';
     const modelId = this.constructor.MODEL_IDS[modelKey] || this.constructor.MODEL_IDS['BiRefNet_lite'];
     if (this._pipelines && this._pipelines[modelKey]) {
       if (this.state.engine !== 'ready') this.setState({ engine: 'ready', engineMsg: '' });
@@ -537,7 +545,12 @@ class Component extends DCLogic {
     const T = await this.loadT();
     try { T.env.allowLocalModels = false; } catch (e) {}
     const cb = (p) => { if (p && p.status === 'progress' && p.progress != null) this.setState({ engineMsg: '모델 다운로드 ' + Math.round(p.progress) + '%' }); };
-    const segmenter = await T.pipeline('background-removal', modelId, { progress_callback: cb });
+    const dtype = this.constructor.MODEL_DTYPES[modelKey] || 'fp16';
+    const segmenter = await T.pipeline('background-removal', modelId, {
+      dtype,
+      device: 'wasm',
+      progress_callback: cb
+    });
     if (!this._pipelines) this._pipelines = {};
     this._pipelines[modelKey] = segmenter;
     this.setState({ engine: 'ready', engineMsg: '' });
@@ -545,17 +558,46 @@ class Component extends DCLogic {
   }
   async rmbgRemove(src) {
     await this.ensureModel();
-    const modelKey = this.props.model || 'BiRefNet_lite';
+    const T = this._T;
+    const modelKey = this.props.model || 'ormbg';
     const segmenter = this._pipelines[modelKey];
     this.setState({ engineMsg: '' });
     const el = await this.loadImage(src);
-    const { c: raster } = this.mkCanvas(el);
+    const { c: raster, W, H } = this.mkCanvas(el);
     // The background-removal pipeline returns an array of RawImage results.
     // Each result already has the background removed (alpha applied).
     const results = await segmenter(raster.toDataURL('image/png'));
     const out = results[0];
-    // Convert the RawImage result to a canvas -> dataURL
-    const canvas = out.toCanvas();
+    // Robustly convert the result to a dataURL. The pipeline may return a
+    // RawImage (with toCanvas) or a canvas-like object. Handle both.
+    let canvas;
+    if (out.toCanvas) {
+      canvas = out.toCanvas();
+    } else if (out instanceof HTMLCanvasElement) {
+      canvas = out;
+    } else {
+      // RawImage with data/width/height — draw onto a fresh canvas
+      canvas = document.createElement('canvas');
+      canvas.width = out.width || W;
+      canvas.height = out.height || H;
+      const ctx = canvas.getContext('2d');
+      const imgData = ctx.createImageData(canvas.width, canvas.height);
+      if (out.data) {
+        imgData.data.set(out.data);
+        ctx.putImageData(imgData, 0, 0);
+      } else {
+        ctx.drawImage(raster, 0, 0);
+      }
+    }
+    // If toCanvas returned something without toDataURL (e.g. OffscreenCanvas),
+    // draw it onto a regular canvas.
+    if (!canvas.toDataURL) {
+      const tmp = document.createElement('canvas');
+      tmp.width = canvas.width || W;
+      tmp.height = canvas.height || H;
+      tmp.getContext('2d').drawImage(canvas, 0, 0);
+      canvas = tmp;
+    }
     if (this.state.engine !== 'ready') this.setState({ engine: 'ready', engineMsg: '' });
     return canvas.toDataURL('image/png');
   }
@@ -1324,8 +1366,8 @@ class Component extends DCLogic {
       toolLassoIcoBg: icoBg(tool === 'lasso'), toolLassoIcoFg: icoFg(tool === 'lasso'),
 
       showEngine: tool === 'auto', engineLabel: eng[0], engineDot: eng[1],
-      modelLabel: this.constructor.MODEL_LABELS[this.props.model || 'BiRefNet_lite'] || 'BiRefNet lite',
-      modelBadge: (this.constructor.MODEL_LABELS[this.props.model || 'BiRefNet_lite'] || 'BiRefNet lite').toUpperCase(),
+      modelLabel: this.constructor.MODEL_LABELS[this.props.model || 'ormbg'] || 'BiRefNet lite',
+      modelBadge: (this.constructor.MODEL_LABELS[this.props.model || 'ormbg'] || 'BiRefNet lite').toUpperCase(),
 
       showLassoOpts: tool === 'lasso',
       setOpNew: () => this.setOp('new'), setOpAdd: () => this.setOp('add'), setOpSub: () => this.setOp('sub'),
