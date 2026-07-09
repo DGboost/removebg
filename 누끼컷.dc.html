@@ -223,6 +223,9 @@ button{font-family:inherit;cursor:pointer;border:none;background:none;color:inhe
 
               <!-- selection overlay -->
               <div onPointerDown="{{ onDown }}" onPointerMove="{{ onMove }}" onPointerUp="{{ onUp }}" style="position:absolute;inset:0;cursor:{{ stageCursor }};touch-action:none;pointer-events:{{ overlayPE }}">
+                <sc-if value="{{ showBrushCursor }}">
+                  <div style="position:absolute;left:{{ brushCursorX }}px;top:{{ brushCursorY }}px;width:{{ brushCursorSize }}px;height:{{ brushCursorSize }}px;margin-left:calc({{ brushCursorSize }}px / -2);margin-top:calc({{ brushCursorSize }}px / -2);border:1.5px solid var(--accent,#3d5afe);border-radius:50%;pointer-events:none;box-shadow:0 0 0 1px rgba(255,255,255,.6),inset 0 0 0 1px rgba(255,255,255,.4);background:color-mix(in srgb,var(--accent,#3d5afe) 8%,transparent);transition:width .1s,height .1s"></div>
+                </sc-if>
                 <svg viewBox="0 0 100 100" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none">
                   <sc-if value="{{ showRect }}">
                     <rect x="{{ rectX }}" y="{{ rectY }}" width="{{ rectW }}" height="{{ rectH }}" fill="color-mix(in srgb,var(--accent,#3d5afe) 14%,transparent)" stroke="var(--accent,#3d5afe)" stroke-width="1.6" vector-effect="non-scaling-stroke" stroke-dasharray="5 3"></rect>
@@ -1084,10 +1087,16 @@ class Component extends DCLogic {
     try { e.currentTarget.setPointerCapture(e.pointerId); } catch (er) {}
   };
   onMove = (e) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const px = e.clientX - r.left, py = e.clientY - r.top;
+    const t = this.state.tool;
+    // Track cursor position for brush cursor preview (even when not dragging)
+    if (t === 'brush' && !this.state.dragging) { this.setState({ cursorPos: [px, py] }); return; }
     if (!this.state.dragging) return;
-    const [fx, fy] = this.frac(e), t = this.state.tool;
+    const [fx, fy] = this.frac(e);
     if (t === 'rect') { const d = this._d; this.setState({ sel: { x: Math.min(d.fx, fx), y: Math.min(d.fy, fy), w: Math.abs(fx - d.fx), h: Math.abs(fy - d.fy) } }); }
     else if (t === 'lasso') { const p = [fx, fy], pts = this.state.lassoPts.slice(), last = pts[pts.length - 1]; if (!last || Math.hypot(p[0] - last[0], p[1] - last[1]) > 0.006) { pts.push(p); this.setState({ lassoPts: pts }); } }
+    else if (t === 'brush') { const p = [fx, fy], pts = this.state.brushPts.slice(), last = pts[pts.length - 1]; if (!last || Math.hypot(p[0] - last[0], p[1] - last[1]) > 0.004) { pts.push(p); this.setState({ brushPts: pts, cursorPos: [px, py] }); } }
   };
   onUp = () => { if (this.state.tool === 'lasso' && this.state.dragging) this.commitLasso(); this.setState({ dragging: false }); };
 
@@ -1200,7 +1209,7 @@ class Component extends DCLogic {
       showTol: tool === 'click', tolVal: this.effTol(), tolLabel: this.effTol(),
       onTol: this.onTol, hasSelection, resetSel: this.resetSel,
 
-      stageCursor: tool === 'click' ? 'pointer' : ((tool === 'rect' || tool === 'lasso') ? 'crosshair' : 'default'),
+      stageCursor: tool === 'click' ? 'pointer' : (tool === 'brush' ? 'none' : ((tool === 'rect' || tool === 'lasso') ? 'crosshair' : 'default')),
       overlayPE: overlayActive ? 'auto' : 'none',
       onDown: this.onDown, onMove: this.onMove, onUp: this.onUp,
       showRect: tool === 'rect' && !!s.sel && s.sel.w > 0,

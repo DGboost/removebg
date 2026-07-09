@@ -179,6 +179,29 @@ button{font-family:inherit;cursor:pointer;border:none;background:none;color:inhe
             <span style="text-align:left"><span style="display:block;font-size:13.5px;font-weight:700">스마트 올가미</span><span style="display:block;font-size:11.5px;color:#9a9aa2;margin-top:1px">영역을 그리면 객체를 인식해요</span></span>
           </button>
 
+          <button onClick="{{ pickBrush }}" style="{{ toolBrushStyle }}">
+            <span style="width:34px;height:34px;flex:none;border-radius:10px;display:flex;align-items:center;justify-content:center;background:{{ toolBrushIcoBg }};color:{{ toolBrushIcoFg }}">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9.06 11.9l8.07-8.06a2.85 2.85 0 1 1 4.03 4.03l-8.06 8.08"></path><path d="M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-2.5 1.52-2 2.02 1.08 1.1 2.49 2.02 4 2.02 2.2 0 4-1.8 4-4.04a3.01 3.01 0 0 0-3-3.02z"></path></svg>
+            </span>
+            <span style="text-align:left"><span style="display:block;font-size:13.5px;font-weight:700">브러시</span><span style="display:block;font-size:11.5px;color:#9a9aa2;margin-top:1px">칠해서 영역 추가·제거</span></span>
+          </button>
+
+          <sc-if value="{{ showBrushOpts }}">
+          <div style="margin-top:8px;padding:13px;border:1px solid #ececec;border-radius:12px;background:#fff">
+            <div style="font-size:11px;font-weight:700;color:#a2a2aa;margin-bottom:9px;font-family:'Spline Sans Mono',monospace">브러시 설정</div>
+            <div style="display:flex;gap:5px;margin-bottom:11px">
+              <button onClick="{{ setBrushAdd }}" style="{{ brushAddStyle }}">추가 +</button>
+              <button onClick="{{ setBrushSub }}" style="{{ brushSubStyle }}">제거 −</button>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:9px">
+              <span style="font-size:12px;font-weight:600;color:#4a4a52">브러시 크기</span>
+              <span style="font-size:11.5px;font-weight:600;color:var(--accent,#3d5afe);font-family:'Spline Sans Mono',monospace">{{ brushSizeLabel }}px</span>
+            </div>
+            <input type="range" min="10" max="80" step="5" value="{{ brushSizeVal }}" onChange="{{ onBrushSize }}" style="width:100%;accent-color:var(--accent,#3d5afe)">
+            <div style="font-size:11px;color:#a2a2aa;margin-top:9px;line-height:1.5">{{ brushTip }}</div>
+          </div>
+          </sc-if>
+
           <sc-if value="{{ showLassoOpts }}">
           <div style="margin-top:8px;padding:13px;border:1px solid #ececec;border-radius:12px;background:#fff">
             <div style="font-size:11px;font-weight:700;color:#a2a2aa;margin-bottom:9px;font-family:'Spline Sans Mono',monospace">올가미 다듬기</div>
@@ -223,6 +246,9 @@ button{font-family:inherit;cursor:pointer;border:none;background:none;color:inhe
 
               <!-- selection overlay -->
               <div onPointerDown="{{ onDown }}" onPointerMove="{{ onMove }}" onPointerUp="{{ onUp }}" style="position:absolute;inset:0;cursor:{{ stageCursor }};touch-action:none;pointer-events:{{ overlayPE }}">
+                <sc-if value="{{ showBrushCursor }}">
+                  <div style="position:absolute;left:{{ brushCursorX }}px;top:{{ brushCursorY }}px;width:{{ brushCursorSize }}px;height:{{ brushCursorSize }}px;margin-left:calc({{ brushCursorSize }}px / -2);margin-top:calc({{ brushCursorSize }}px / -2);border:1.5px solid var(--accent,#3d5afe);border-radius:50%;pointer-events:none;box-shadow:0 0 0 1px rgba(255,255,255,.6),inset 0 0 0 1px rgba(255,255,255,.4);background:color-mix(in srgb,var(--accent,#3d5afe) 8%,transparent);transition:width .1s,height .1s"></div>
+                </sc-if>
                 <svg viewBox="0 0 100 100" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none">
                   <sc-if value="{{ showRect }}">
                     <rect x="{{ rectX }}" y="{{ rectY }}" width="{{ rectW }}" height="{{ rectH }}" fill="color-mix(in srgb,var(--accent,#3d5afe) 14%,transparent)" stroke="var(--accent,#3d5afe)" stroke-width="1.6" vector-effect="non-scaling-stroke" stroke-dasharray="5 3"></rect>
@@ -366,6 +392,7 @@ class Component extends DCLogic {
     saved: [], filter: 'all', saveFolder: '제품', toast: '',
     engine: 'idle', engineMsg: '',
     lassoOp: 'new', magnetic: true, selMaskUrl: null, hasLassoSel: false,
+    brushPts: [], brushSize: 30, brushOp: 'add', cursorPos: null,
     dropActive: false
   };
   folders = ['제품', '소품', '기타'];
@@ -1209,7 +1236,7 @@ class Component extends DCLogic {
   // ---------- nav ----------
   goHome = () => this.setState({ view: 'home' });
   goGallery = () => this.setState({ view: 'gallery' });
-  openEditor = (sc) => this.setState({ view: 'editor', editorImage: sc, processed: false, processing: false, resultSrc: null, sel: null, lassoPts: [], wandPt: null, tool: 'auto', compareOn: false, selMaskUrl: null, hasLassoSel: false, lassoOp: 'new' });
+  openEditor = (sc) => this.setState({ view: 'editor', editorImage: sc, processed: false, processing: false, resultSrc: null, sel: null, lassoPts: [], wandPt: null, brushPts: [], tool: 'auto', compareOn: false, selMaskUrl: null, hasLassoSel: false, lassoOp: 'new' });
 
   onUpload = (e) => {
     const f = e.target.files && e.target.files[0]; if (!f) return;
@@ -1219,20 +1246,53 @@ class Component extends DCLogic {
   // ---------- tools ----------
   baseSrc() { return this.state.resultSrc || (this.state.editorImage && this.state.editorImage.photo); }
   setTool = (t) => {
-    // switching INTO smart lasso keeps whatever result already exists so it can
-    // touch it up further; switching to any other tool starts that tool fresh.
-    const keepResult = t === 'lasso' && this.state.processed;
+    // ALL tools share one result stream: each tool works on top of the current
+    // result via baseSrc(), so switching tools never loses progress.
+    // lasso/brush need prepLasso to set up _raster/_origRaster/_selCtx.
     this.setState({
       tool: t, sel: null, lassoPts: [], wandPt: null, compareOn: false, selMaskUrl: null, hasLassoSel: false, lassoOp: 'new',
-      ...(keepResult ? {} : { processed: false, resultSrc: null })
+      brushPts: [], cursorPos: null
     });
-    if (t === 'lasso') this.prepLasso();
+    if (t === 'lasso' || t === 'brush') this.prepLasso();
   };
-  resetSel = () => { if (this._selCtx && this._work) this._selCtx.clearRect(0, 0, this._work.W, this._work.H); this.setState({ sel: null, lassoPts: [], wandPt: null, selMaskUrl: null, hasLassoSel: false, lassoOp: 'new' }); };
+  resetSel = () => { if (this._selCtx && this._work) this._selCtx.clearRect(0, 0, this._work.W, this._work.H); this.setState({ sel: null, lassoPts: [], wandPt: null, brushPts: [], selMaskUrl: null, hasLassoSel: false, lassoOp: 'new' }); };
   onTol = (e) => this.setState({ tol: +e.target.value, tolTouched: true });
   toggleCompare = (e) => this.setState({ compareOn: !!e.target.checked });
   setOp = (op) => this.setState({ lassoOp: op });
   toggleMagnetic = (e) => this.setState({ magnetic: !!e.target.checked });
+  setBrushAdd = () => this.setState({ brushOp: 'add' });
+  setBrushSub = () => this.setState({ brushOp: 'sub' });
+  onBrushSize = (e) => this.setState({ brushSize: +e.target.value });
+  // Build a mask from brush strokes: each point becomes a filled circle of
+  // brushSize radius. Returns a canvas the same size as the working image.
+  brushMask(pts) {
+    const { W, H } = this._work;
+    const c = document.createElement('canvas'); c.width = W; c.height = H;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#fff';
+    const r = this.state.brushSize;
+    for (const p of pts) { ctx.beginPath(); ctx.arc(p[0] * W, p[1] * H, r, 0, Math.PI * 2); ctx.fill(); }
+    return c;
+  }
+  // Apply brush stroke: add reveals object from original, sub erases.
+  // Reuses the lasso infrastructure (_raster, _origRaster, _selCtx).
+  async brushApplyRun(mask, op) {
+    const { c, x, W, H } = this.mkCanvas(await this.loadImage(this.baseSrc()));
+    if (op === 'sub') {
+      x.globalCompositeOperation = 'destination-out'; x.drawImage(mask, 0, 0, W, H); x.globalCompositeOperation = 'source-over';
+    } else {
+      const oc = this._origRaster || this._raster;
+      if (oc) {
+        const reveal = document.createElement('canvas'); reveal.width = W; reveal.height = H;
+        const rctx = reveal.getContext('2d');
+        rctx.drawImage(oc, 0, 0, W, H);
+        rctx.globalCompositeOperation = 'destination-in'; rctx.drawImage(mask, 0, 0, W, H);
+        x.drawImage(reveal, 0, 0);
+        this.inpaintRemainingHoles(x, W, H, mask);
+      }
+    }
+    return c.toDataURL('image/png');
+  }
 
   runRemoval = async () => {
     const sc = this.state.editorImage; if (!sc) return;
@@ -1246,6 +1306,7 @@ class Component extends DCLogic {
         catch (e) { console.error('[AI bg-remove] fallback:', e); const img = await this.loadImage(base); out = this.autoRemove(img, tol); this.setState({ engine: 'error', engineMsg: '' }); this.flash('AI 엔진을 불러오지 못해 기본 엔진으로 처리했어요'); }
       } else if (tool === 'rect' && this.state.sel && this.state.sel.w > 0.02) { const img = await this.loadImage(base); out = this.rectKeep(img, this.state.sel, tol); }
       else if (tool === 'lasso' && this._strokeMask) { out = await this.lassoApplyRun(this._strokeMask, this._strokeZone, this._strokeOp, this._strokeRecognized); this._strokeMask = null; }
+      else if (tool === 'brush' && this._strokeMask) { out = await this.brushApplyRun(this._strokeMask, this._strokeOp); this._strokeMask = null; }
       else if (tool === 'click' && this.state.wandPt) { const img = await this.loadImage(base); out = this.wandRemove(img, this.state.wandPt, tol); }
       else { const img = await this.loadImage(base); out = this.autoRemove(img, tol); }
     } catch (e) { this.setState({ processing: false }); this.flash('이미지를 처리할 수 없습니다'); return; }
@@ -1260,16 +1321,87 @@ class Component extends DCLogic {
     const t = this.state.tool, [fx, fy] = this.frac(e);
     if (t === 'rect') { this._d = { fx, fy }; this.setState({ dragging: true, processed: false, sel: { x: fx, y: fy, w: 0, h: 0 }, lassoPts: [] }); }
     else if (t === 'lasso') { this.setState({ dragging: true, processed: false, lassoPts: [[fx, fy]] }); }
+    else if (t === 'brush') {
+      this.setState({ dragging: true, processed: false, brushPts: [[fx, fy]] });
+      // Draw first dot immediately for instant feedback
+      if (this._selCtx && this._work) {
+        const { W, H } = this._work, r = this.state.brushSize;
+        if (this.state.brushOp === 'sub') { this._selCtx.globalCompositeOperation = 'destination-out'; }
+        else { this._selCtx.globalCompositeOperation = 'source-over'; }
+        this._selCtx.beginPath();
+        this._selCtx.arc(fx * W, fy * H, r, 0, Math.PI * 2);
+        this._selCtx.fillStyle = '#fff'; this._selCtx.fill();
+        this._selCtx.globalCompositeOperation = 'source-over';
+        const { url } = this.buildSelOverlay();
+        this.setState({ selMaskUrl: url });
+      }
+    }
     else if (t === 'click') { this.setState({ wandPt: [fx, fy] }, () => this.runRemoval()); }
     try { e.currentTarget.setPointerCapture(e.pointerId); } catch (er) {}
   };
   onMove = (e) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const px = e.clientX - r.left, py = e.clientY - r.top;
+    const t = this.state.tool;
+    // Track cursor position for brush cursor preview (even when not dragging)
+    if (t === 'brush' && !this.state.dragging) { this.setState({ cursorPos: [px, py] }); return; }
     if (!this.state.dragging) return;
-    const [fx, fy] = this.frac(e), t = this.state.tool;
+    const [fx, fy] = this.frac(e);
     if (t === 'rect') { const d = this._d; this.setState({ sel: { x: Math.min(d.fx, fx), y: Math.min(d.fy, fy), w: Math.abs(fx - d.fx), h: Math.abs(fy - d.fy) } }); }
     else if (t === 'lasso') { const p = [fx, fy], pts = this.state.lassoPts.slice(), last = pts[pts.length - 1]; if (!last || Math.hypot(p[0] - last[0], p[1] - last[1]) > 0.006) { pts.push(p); this.setState({ lassoPts: pts }); } }
+    else if (t === 'brush') {
+      const p = [fx, fy], pts = this.state.brushPts.slice(), last = pts[pts.length - 1];
+      if (!last || Math.hypot(p[0] - last[0], p[1] - last[1]) > 0.004) {
+        pts.push(p);
+        // Real-time preview: draw the brush dot onto _selCtx immediately
+        // so the user sees where they're painting as they paint.
+        if (this._selCtx && this._work) {
+          const { W, H } = this._work, r = this.state.brushSize;
+          const op = this.state.brushOp;
+          if (op === 'sub') { this._selCtx.globalCompositeOperation = 'destination-out'; }
+          else { this._selCtx.globalCompositeOperation = 'source-over'; }
+          // Draw a line from last point to current for smooth strokes
+          if (last) {
+            this._selCtx.strokeStyle = '#fff'; this._selCtx.lineWidth = r * 2;
+            this._selCtx.lineCap = 'round'; this._selCtx.lineJoin = 'round';
+            this._selCtx.beginPath();
+            this._selCtx.moveTo(last[0] * W, last[1] * H);
+            this._selCtx.lineTo(p[0] * W, p[1] * H);
+            this._selCtx.stroke();
+          }
+          this._selCtx.beginPath();
+          this._selCtx.arc(p[0] * W, p[1] * H, r, 0, Math.PI * 2);
+          this._selCtx.fillStyle = '#fff'; this._selCtx.fill();
+          this._selCtx.globalCompositeOperation = 'source-over';
+        }
+        this.setState({ brushPts: pts, cursorPos: [px, py] });
+        // Update the overlay preview without running removal
+        if (this._selCtx && this._work) {
+          const { url } = this.buildSelOverlay();
+          this.setState({ selMaskUrl: url });
+        }
+      }
+    }
   };
-  onUp = () => { if (this.state.tool === 'lasso' && this.state.dragging) this.commitLasso(); this.setState({ dragging: false }); };
+  onUp = () => {
+    if (this.state.tool === 'lasso' && this.state.dragging) this.commitLasso();
+    if (this.state.tool === 'brush' && this.state.dragging) this.commitBrush();
+    this.setState({ dragging: false });
+  };
+  commitBrush() {
+    const pts = this.state.brushPts;
+    if (pts.length < 1 || !this._work) { this.setState({ brushPts: [] }); return; }
+    // Build the mask from brushPts directly (not from _selCanvas).
+    // _selCanvas is used for the visual overlay, but when sub is used,
+    // destination-out modifies _selCanvas itself, so it can't serve as the
+    // erase mask. brushMask() always produces a clean white-on-transparent
+    // mask of exactly the painted area.
+    const mask = this.brushMask(pts);
+    const op = this.state.brushOp;
+    this._strokeMask = mask; this._strokeZone = mask; this._strokeOp = op; this._strokeRecognized = false;
+    const { url, has } = this.buildSelOverlay();
+    this.setState({ brushPts: [], selMaskUrl: url, hasLassoSel: has }, () => this.runRemoval());
+  }
 
   // ---------- gallery / save ----------
   flash = (m) => { this.setState({ toast: m }); clearTimeout(this._t); this._t = setTimeout(() => this.setState({ toast: '' }), 2200); };
@@ -1303,7 +1435,7 @@ class Component extends DCLogic {
     const tool = s.tool;
     const hasRect = !!(s.sel && s.sel.w > 0.02 && s.sel.h > 0.02);
     const hasSelection = tool === 'rect' ? hasRect : tool === 'lasso' ? s.hasLassoSel : false;
-    const overlayActive = !!s.editorImage && !s.processing && (tool === 'rect' || tool === 'lasso' || tool === 'click');
+    const overlayActive = !!s.editorImage && !s.processing && (tool === 'rect' || tool === 'lasso' || tool === 'click' || tool === 'brush');
     const stageSrc = (s.processed && !s.compareOn && s.resultSrc) ? s.resultSrc : (s.editorImage ? s.editorImage.photo : '');
     const primaryEnabled = tool === 'auto' ? true : hasSelection;
     const primaryLabel = tool === 'rect' ? '선택 영역 추출' : tool === 'lasso' ? '올가미 영역 추출' : 'AI로 배경 제거';
@@ -1358,12 +1490,13 @@ class Component extends DCLogic {
       toggleCompare: this.toggleCompare, downloadCurrent: this.downloadCurrent, saveCurrent: this.saveCurrent,
       dlBtnStyle, saveBtnStyle, folders: this.folders, saveFolder: s.saveFolder, onFolder: this.onFolder,
 
-      pickAuto: () => this.setTool('auto'), pickClick: () => this.setTool('click'), pickRect: () => this.setTool('rect'), pickLasso: () => this.setTool('lasso'),
-      toolAutoStyle: toolStyle(tool === 'auto'), toolClickStyle: toolStyle(tool === 'click'), toolRectStyle: toolStyle(tool === 'rect'), toolLassoStyle: toolStyle(tool === 'lasso'),
+      pickAuto: () => this.setTool('auto'), pickClick: () => this.setTool('click'), pickRect: () => this.setTool('rect'), pickLasso: () => this.setTool('lasso'), pickBrush: () => this.setTool('brush'),
+      toolAutoStyle: toolStyle(tool === 'auto'), toolClickStyle: toolStyle(tool === 'click'), toolRectStyle: toolStyle(tool === 'rect'), toolLassoStyle: toolStyle(tool === 'lasso'), toolBrushStyle: toolStyle(tool === 'brush'),
       toolAutoIcoBg: icoBg(tool === 'auto'), toolAutoIcoFg: icoFg(tool === 'auto'),
       toolClickIcoBg: icoBg(tool === 'click'), toolClickIcoFg: icoFg(tool === 'click'),
       toolRectIcoBg: icoBg(tool === 'rect'), toolRectIcoFg: icoFg(tool === 'rect'),
       toolLassoIcoBg: icoBg(tool === 'lasso'), toolLassoIcoFg: icoFg(tool === 'lasso'),
+      toolBrushIcoBg: icoBg(tool === 'brush'), toolBrushIcoFg: icoFg(tool === 'brush'),
 
       showEngine: tool === 'auto', engineLabel: eng[0], engineDot: eng[1],
       modelLabel: this.constructor.MODEL_LABELS[this.props.model || 'ormbg'] || 'BiRefNet lite',
@@ -1377,22 +1510,32 @@ class Component extends DCLogic {
         ? '여백을 두고 그리면 그 안에서 배경과 물체를 구분해 올가미를 자동으로 맞춰요. 물체 안쪽만 그리면 그린 그대로 추가·제외돼요.'
         : '그린 영역을 그대로 선택 영역으로 사용해요.',
 
+      showBrushOpts: tool === 'brush',
+      showBrushCursor: tool === 'brush' && !s.processing && !!s.cursorPos,
+      brushCursorX: s.cursorPos ? s.cursorPos[0] : 0,
+      brushCursorY: s.cursorPos ? s.cursorPos[1] : 0,
+      brushCursorSize: s.brushSize,
+      setBrushAdd: this.setBrushAdd, setBrushSub: this.setBrushSub,
+      brushAddStyle: segStyle(s.brushOp === 'add'), brushSubStyle: segStyle(s.brushOp === 'sub'),
+      brushSizeVal: s.brushSize, brushSizeLabel: s.brushSize,
+      onBrushSize: this.onBrushSize,
+      brushTip: s.brushOp === 'add' ? '칠한 영역의 객체를 복원해요. 크기를 조절해가며 칠해보세요.' : '칠한 영역을 지워요. 크기를 조절해가며 칠해보세요.',
       showTol: tool === 'click', tolVal: this.effTol(), tolLabel: this.effTol(),
       onTol: this.onTol, hasSelection, resetSel: this.resetSel,
 
-      stageCursor: tool === 'click' ? 'pointer' : ((tool === 'rect' || tool === 'lasso') ? 'crosshair' : 'default'),
+      stageCursor: tool === 'click' ? 'pointer' : (tool === 'brush' ? 'none' : ((tool === 'rect' || tool === 'lasso') ? 'crosshair' : 'default')),
       overlayPE: overlayActive ? 'auto' : 'none',
       onDown: this.onDown, onMove: this.onMove, onUp: this.onUp,
       showRect: tool === 'rect' && !!s.sel && s.sel.w > 0,
       rectX: s.sel ? s.sel.x * 100 : 0, rectY: s.sel ? s.sel.y * 100 : 0, rectW: s.sel ? s.sel.w * 100 : 0, rectH: s.sel ? s.sel.h * 100 : 0,
       showLasso: tool === 'lasso' && s.lassoPts.length > 1,
       lassoStr: s.lassoPts.map(p => (p[0] * 100).toFixed(2) + ',' + (p[1] * 100).toFixed(2)).join(' '),
-      showSelMask: tool === 'lasso' && !!s.selMaskUrl && !s.processing, selMaskUrl: s.selMaskUrl,
+      showSelMask: (tool === 'lasso' || tool === 'brush') && !!s.selMaskUrl && !s.processing, selMaskUrl: s.selMaskUrl,
       showClickHint: tool === 'click' && !s.processing && !s.processed,
       showDone: s.processed && !s.processing && !s.compareOn,
       doneLabel: tool === 'auto' ? 'AI 배경 제거 완료' : '배경 제거 완료',
 
-      showPrimary: !!s.editorImage && !s.processed && tool !== 'click',
+      showPrimary: !!s.editorImage && !s.processed && tool !== 'click' && tool !== 'brush',
       primaryDisabled: !primaryEnabled, primaryStyle, primaryLabel, primaryHint, runRemoval: this.runRemoval,
       processMsg: s.engine === 'loading' ? (s.engineMsg || 'AI 엔진 불러오는 중…') : (tool === 'auto' ? 'AI로 배경 분석 중…' : '영역을 처리하는 중…'),
       processSub: s.engine === 'loading' ? '최초 1회만 모델을 내려받아요 · 수십 초 소요될 수 있어요' : '',
