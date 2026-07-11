@@ -1,11 +1,38 @@
 {
   "name": "removebg",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
-  "description": "누끼컷 - standalone background removal tool, embeddable via iframe",
+  "description": "누끼컷 - AI background removal React component (client-side, transformers.js)",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
   "files": [
-    "누끼컷.dc.html",
-    "support.js",
+    "dist",
     "README.md"
-  ]
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format esm,cjs --dts",
+    "prepare": "npm run build",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "react": ">=18",
+    "react-dom": ">=18"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tsup": "^8.3.0",
+    "typescript": "^5.6.3"
+  }
 }
