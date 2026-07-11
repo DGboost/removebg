@@ -33,6 +33,15 @@ import { RemoveBgTool } from "removebg";
 - **스마트 올가미** — draw a rough loop; a magnetic-lasso heuristic snaps it to the real object edge using local color segmentation.
 - **브러시** — paint to add back or erase parts of the current result.
 
+## Run locally
+
+```bash
+npm install
+npm run dev   # vite dev server on http://localhost:5173, mounts <RemoveBgTool /> standalone
+```
+
+`demo/` is a minimal Vite harness for previewing the component in a browser on its own — it's dev-only and not part of the published package (see `package.json` "files").
+
 ## Develop
 
 ```bash
