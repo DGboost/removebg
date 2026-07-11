@@ -870,259 +870,203 @@ class Component extends DCLogic {
     ctx.globalCompositeOperation = 'destination-out'; ctx.drawImage(b, 0, 0);
     return c;
   }
-  // ADD is fundamentally different from a fresh selection: the user has
-  // deliberately circled a region they want brought BACK into the object, so
-  // the answer is "reveal the whole circled area" — minus only the parts that
-  // are truly outside background. Re-running color recognition the normal way
-  // fails exactly where it matters most: a light object part (Pororo's white
-  // belly/cheeks) looks almost identical to the removed light background, so
-  // it gets re-classified as background and nothing is added no matter how
-  // many times you try. Instead we flood-fill background INWARD from just
-  // outside the loop: only background that connects to the outside gets
-  // trimmed, while a light interior area walled off by the object (the belly,
-  // enclosed by the blue body) is kept. This snaps the outer edge to the
-  // object AND fills light interior gaps — both at once.
-  refineAddMask(pts) {
+  // ---- shared local object/background segmentation for add & exclude ----
+  // Within the drawn loop (plus a surrounding margin) label every pixel as
+  // object or background, so a stroke can add the object side or erase the
+  // background side while snapping to the real edge. Two independent signals
+  // drive this, and crucially NEITHER is the loop-interior alpha (that's the
+  // very thing being corrected, so it can't be trusted inside the loop):
+  //   • COLOUR comes from the ORIGINAL photo (_origRaster) — reliable
+  //     everywhere, including where the result raster blanked removed pixels.
+  //   • The current cut's ALPHA (_raster), sampled only in the MARGIN outside
+  //     the loop, tells us which nearby colours are known-object (opaque) vs
+  //     known-background (transparent). Those seed two colour models; every
+  //     in-loop pixel is then assigned to whichever model it's closer to.
+  // Returns null when there's nothing reliable to compare against (caller then
+  // falls back to the literal drawn shape so a stroke is never wasted).
+  segmentLoop(pts, padRatio) {
     const { W, H } = this._work;
-    const raw = this.rawLassoMask(pts);
-    if (!this._raster || !this.state.magnetic) return { mask: raw, recognized: false };
+    if (!this._raster) return null;
+    const colorSrc = this._origRaster || this._raster;
     let bx0 = W, by0 = H, bx1 = 0, by1 = 0;
     pts.forEach(p => { const X = p[0] * W, Y = p[1] * H; bx0 = Math.min(bx0, X); by0 = Math.min(by0, Y); bx1 = Math.max(bx1, X); by1 = Math.max(by1, Y); });
     const loopW = Math.max(1, bx1 - bx0), loopH = Math.max(1, by1 - by0);
-    const padX = Math.max(10, loopW * 0.18), padY = Math.max(10, loopH * 0.18);
+    const padX = Math.max(12, loopW * padRatio), padY = Math.max(12, loopH * padRatio);
     const minX = Math.max(0, Math.floor(bx0 - padX)), minY = Math.max(0, Math.floor(by0 - padY));
     const maxX = Math.min(W, Math.ceil(bx1 + padX)), maxY = Math.min(H, Math.ceil(by1 + padY));
     const bw = Math.max(1, Math.round(maxX - minX)), bh = Math.max(1, Math.round(maxY - minY));
-
-    const rc = document.createElement('canvas'); rc.width = bw; rc.height = bh;
-    rc.getContext('2d').drawImage(raw, minX, minY, bw, bh, 0, 0, bw, bh);
-    const rawData = rc.getContext('2d').getImageData(0, 0, bw, bh).data;
-
-    const crop = document.createElement('canvas'); crop.width = bw; crop.height = bh;
-    const cctx = crop.getContext('2d', { willReadFrequently: true });
-    cctx.drawImage(this._raster, minX, minY, bw, bh, 0, 0, bw, bh);
-    const px = cctx.getImageData(0, 0, bw, bh).data;
-
-    // ALPHA FAST PATH: when the working raster already has transparency (e.g.
-    // after click eraser or a prior lasso pass), the alpha channel IS the true
-    // object/background boundary — far more reliable than color guessing.
-    // Inside the drawn loop: keep pixels that are opaque (object), trim pixels
-    // that are transparent AND connected to the outside (background). This is
-    // the same principle as the color flood-fill below, but using alpha directly.
-    {
-      let lowA = 0, highA = 0;
-      const total = bw * bh;
-      for (let i = 0; i < total; i++) {
-        const a = px[i * 4 + 3];
-        if (a < 30) lowA++; else if (a > 220) highA++;
-      }
-      if (lowA > total * 0.03 && highA > total * 0.03 && (lowA + highA) / total > 0.6) {
-        // flood-fill transparent (background) pixels from the crop border inward
-        const reach = new Uint8Array(total);
-        const stack = [];
-        const seed = (i) => { if (px[i * 4 + 3] < 30 && !reach[i]) { reach[i] = 1; stack.push(i); } };
-        for (let x = 0; x < bw; x++) { seed(x); seed((bh - 1) * bw + x); }
-        for (let y = 0; y < bh; y++) { seed(y * bw); seed(y * bw + bw - 1); }
-        while (stack.length) {
-          const i = stack.pop(), x = i % bw, y = (i / bw) | 0;
-          if (x > 0) seed(i - 1); if (x < bw - 1) seed(i + 1);
-          if (y > 0) seed(i - bw); if (y < bh - 1) seed(i + bw);
-        }
-        const od = cctx.createImageData(bw, bh);
-        let kept = 0, rawCount = 0;
-        for (let i = 0; i < total; i++) {
-          const inRaw = rawData[i * 4 + 3] > 40; if (inRaw) rawCount++;
-          const on = inRaw && !reach[i];
-          od.data[i * 4] = 255; od.data[i * 4 + 1] = 255; od.data[i * 4 + 2] = 255; od.data[i * 4 + 3] = on ? 255 : 0;
-          if (on) kept++;
-        }
-        if (rawCount > 0 && kept / rawCount < 0.15) return { mask: raw, recognized: false };
-        const tmp = document.createElement('canvas'); tmp.width = bw; tmp.height = bh;
-        tmp.getContext('2d').putImageData(od, 0, 0);
-        const out = document.createElement('canvas'); out.width = W; out.height = H;
-        out.getContext('2d').drawImage(tmp, minX, minY);
-        return { mask: out, recognized: true };
-      }
-    }
-
-    // background reference = robust (trimmed) average of the margin ring around
-    // the drawn loop — same estimator the edge classifier uses.
-    const marginIdx = [];
-    for (let i = 0; i < bw * bh; i++) { if (rawData[i * 4 + 3] <= 40) marginIdx.push(i); }
-    if (marginIdx.length < Math.max(20, bw * bh * 0.02)) return { mask: raw, recognized: false };
-    const stepN = Math.max(1, Math.floor(marginIdx.length / 600));
-    let samples = [];
-    for (let k = 0; k < marginIdx.length; k += stepN) { const i = marginIdx[k]; samples.push([px[i * 4], px[i * 4 + 1], px[i * 4 + 2]]); }
-    let br = 0, bg = 0, bb = 0;
-    for (const sm of samples) { br += sm[0]; bg += sm[1]; bb += sm[2]; }
-    br /= samples.length; bg /= samples.length; bb /= samples.length;
-    let pool = samples;
-    for (let it = 0; it < 3; it++) {
-      const ranked = pool.map(sm => ({ sm, d: (sm[0] - br) ** 2 + (sm[1] - bg) ** 2 + (sm[2] - bb) ** 2 }));
-      ranked.sort((a, b) => a.d - b.d);
-      pool = ranked.slice(0, Math.max(8, Math.floor(ranked.length * 0.65))).map(w => w.sm);
-      br = 0; bg = 0; bb = 0;
-      for (const sm of pool) { br += sm[0]; bg += sm[1]; bb += sm[2]; }
-      br /= pool.length; bg /= pool.length; bb /= pool.length;
-    }
-    // if the margin isn't a consistent background (loop sits deep inside the
-    // object, nothing to trim against), just fill exactly what was drawn.
-    let close = 0;
-    for (const i of marginIdx) {
-      const rr = px[i * 4], gg = px[i * 4 + 1], bv = px[i * 4 + 2];
-      if (Math.sqrt((rr - br) ** 2 + (gg - bg) ** 2 + (bv - bb) ** 2) < 55) close++;
-    }
-    if (close / marginIdx.length < 0.45) return { mask: raw, recognized: false };
-
-    const tol = this.effTol();
-    const isBg = new Uint8Array(bw * bh);
-    for (let i = 0; i < bw * bh; i++) {
-      const rr = px[i * 4], gg = px[i * 4 + 1], bv = px[i * 4 + 2];
-      if (Math.sqrt((rr - br) ** 2 + (gg - bg) ** 2 + (bv - bb) ** 2) <= tol) isBg[i] = 1;
-    }
-    // flood-fill outside background from the crop border inward, through
-    // background-classified pixels only.
-    const reach = new Uint8Array(bw * bh);
-    const stack = [];
-    const seed = (i) => { if (isBg[i] && !reach[i]) { reach[i] = 1; stack.push(i); } };
-    for (let x = 0; x < bw; x++) { seed(x); seed((bh - 1) * bw + x); }
-    for (let y = 0; y < bh; y++) { seed(y * bw); seed(y * bw + bw - 1); }
-    while (stack.length) {
-      const i = stack.pop(), x = i % bw, y = (i / bw) | 0;
-      if (x > 0) seed(i - 1); if (x < bw - 1) seed(i + 1);
-      if (y > 0) seed(i - bw); if (y < bh - 1) seed(i + bw);
-    }
-    const od = cctx.createImageData(bw, bh);
-    let kept = 0, rawCount = 0;
-    for (let i = 0; i < bw * bh; i++) {
-      const inRaw = rawData[i * 4 + 3] > 40; if (inRaw) rawCount++;
-      const on = inRaw && !reach[i];
-      od.data[i * 4] = 255; od.data[i * 4 + 1] = 255; od.data[i * 4 + 2] = 255; od.data[i * 4 + 3] = on ? 255 : 0;
-      if (on) kept++;
-    }
-    // if trimming somehow removed almost the whole loop (bad classification),
-    // don't leave the user with nothing — fall back to the drawn shape.
-    if (rawCount > 0 && kept / rawCount < 0.15) return { mask: raw, recognized: false };
-    const tmp = document.createElement('canvas'); tmp.width = bw; tmp.height = bh;
-    tmp.getContext('2d').putImageData(od, 0, 0);
-    const out = document.createElement('canvas'); out.width = W; out.height = H;
-    out.getContext('2d').drawImage(tmp, minX, minY);
-    return { mask: out, recognized: true };
-  }
-  // SUB (exclude): the user circles a region to TRIM. We need to recognize
-// which pixels inside the loop are background (to erase) vs object (to keep).
-// This mirrors refineAddMask's approach but in reverse: classify background
-// pixels and erase only those, keeping object pixels intact. Without this,
-// sub uses refineLassoMask + subtractCanvas which can produce rectangle-shaped
-// erasure zones when the alpha fast path returns a bbox-sized zone.
-  refineSubMask(pts) {
-    const { W, H } = this._work;
-    const raw = this.rawLassoMask(pts);
-    if (!this._raster || !this.state.magnetic) return { mask: raw, recognized: false };
-    let bx0 = W, by0 = H, bx1 = 0, by1 = 0;
-    pts.forEach(p => { const X = p[0] * W, Y = p[1] * H; bx0 = Math.min(bx0, X); by0 = Math.min(by0, Y); bx1 = Math.max(bx1, X); by1 = Math.max(by1, Y); });
-    const loopW = Math.max(1, bx1 - bx0), loopH = Math.max(1, by1 - by0);
-    const padX = Math.max(10, loopW * 0.18), padY = Math.max(10, loopH * 0.18);
-    const minX = Math.max(0, Math.floor(bx0 - padX)), minY = Math.max(0, Math.floor(by0 - padY));
-    const maxX = Math.min(W, Math.ceil(bx1 + padX)), maxY = Math.min(H, Math.ceil(by1 + padY));
-    const bw = Math.max(1, Math.round(maxX - minX)), bh = Math.max(1, Math.round(maxY - minY));
-
-    const rc = document.createElement('canvas'); rc.width = bw; rc.height = bh;
-    rc.getContext('2d').drawImage(raw, minX, minY, bw, bh, 0, 0, bw, bh);
-    const rawData = rc.getContext('2d').getImageData(0, 0, bw, bh).data;
-
-    const crop = document.createElement('canvas'); crop.width = bw; crop.height = bh;
-    const cctx = crop.getContext('2d', { willReadFrequently: true });
-    cctx.drawImage(this._raster, minX, minY, bw, bh, 0, 0, bw, bh);
-    const px = cctx.getImageData(0, 0, bw, bh).data;
     const total = bw * bh;
 
-    // ALPHA FAST PATH: when the raster has transparency, we can directly
-    // identify background pixels. Unlike add (which flood-fills from outside
-    // to preserve interior object areas), sub should erase ALL background
-    // within the loop — including interior holes that don't connect to the
-    // outside. So we erase: (a) transparent pixels inside the loop, AND
-    // (b) opaque pixels inside the loop whose color matches the surrounding
-    // background (catches holes the AI incorrectly filled as object).
-    {
-      let lowA = 0, highA = 0;
-      for (let i = 0; i < total; i++) {
-        const a = px[i * 4 + 3];
-        if (a < 30) lowA++; else if (a > 220) highA++;
+    // inside-loop mask (rasterize the drawn polygon into crop-local coords)
+    const rawC = document.createElement('canvas'); rawC.width = bw; rawC.height = bh;
+    const rctx = rawC.getContext('2d', { willReadFrequently: true });
+    rctx.beginPath();
+    pts.forEach((p, i) => { const X = p[0] * W - minX, Y = p[1] * H - minY; i ? rctx.lineTo(X, Y) : rctx.moveTo(X, Y); });
+    rctx.closePath(); rctx.fillStyle = '#fff'; rctx.fill();
+    const inA = rctx.getImageData(0, 0, bw, bh).data;
+    const inLoop = new Uint8Array(total);
+    for (let i = 0; i < total; i++) inLoop[i] = inA[i * 4 + 3] > 40 ? 1 : 0;
+
+    // colours from the original photo, alpha from the current result
+    const colC = document.createElement('canvas'); colC.width = bw; colC.height = bh;
+    const colCtx = colC.getContext('2d', { willReadFrequently: true });
+    colCtx.drawImage(colorSrc, minX, minY, bw, bh, 0, 0, bw, bh);
+    const col = colCtx.getImageData(0, 0, bw, bh).data;
+    const alC = document.createElement('canvas'); alC.width = bw; alC.height = bh;
+    const alCtx = alC.getContext('2d', { willReadFrequently: true });
+    alCtx.drawImage(this._raster, minX, minY, bw, bh, 0, 0, bw, bh);
+    const al = alCtx.getImageData(0, 0, bw, bh).data;
+
+    // does the current result carry a real alpha boundary in this crop?
+    let lowA = 0, highA = 0;
+    for (let i = 0; i < total; i++) { const a = al[i * 4 + 3]; if (a < 40) lowA++; else if (a > 200) highA++; }
+    const hasAlpha = lowA > total * 0.02 && highA > total * 0.02;
+
+    // robust trimmed-average colour over a set of pixel indices
+    const trimmedAvg = (idx) => {
+      if (idx.length < 8) return null;
+      const step = Math.max(1, Math.floor(idx.length / 800));
+      const s = [];
+      for (let k = 0; k < idx.length; k += step) { const i = idx[k]; s.push([col[i * 4], col[i * 4 + 1], col[i * 4 + 2]]); }
+      let r = 0, g = 0, b = 0; for (const v of s) { r += v[0]; g += v[1]; b += v[2]; } r /= s.length; g /= s.length; b /= s.length;
+      let pool = s;
+      for (let it = 0; it < 3; it++) {
+        const rk = pool.map(v => ({ v, d: (v[0] - r) ** 2 + (v[1] - g) ** 2 + (v[2] - b) ** 2 }));
+        rk.sort((a, b) => a.d - b.d);
+        pool = rk.slice(0, Math.max(6, Math.floor(rk.length * 0.7))).map(w => w.v);
+        r = 0; g = 0; b = 0; for (const v of pool) { r += v[0]; g += v[1]; b += v[2]; } r /= pool.length; g /= pool.length; b /= pool.length;
       }
-      if (lowA > total * 0.03 && highA > total * 0.03 && (lowA + highA) / total > 0.6) {
-        // Estimate background color from transparent pixels in the margin
-        // (outside the loop but inside the crop).
-        let br = 0, bg = 0, bb = 0, bN = 0;
-        for (let i = 0; i < total; i++) {
-          if (rawData[i * 4 + 3] <= 40 && px[i * 4 + 3] < 30) {
-            br += px[i * 4]; bg += px[i * 4 + 1]; bb += px[i * 4 + 2]; bN++;
-          }
-        }
-        if (bN > 0) { br /= bN; bg /= bN; bb /= bN; }
-        const tol = this.effTol();
-        // erase mask = pixels inside the loop that are either transparent
-        // OR match the background color (catches filled-in interior holes)
-        const od = cctx.createImageData(bw, bh);
-        for (let i = 0; i < total; i++) {
-          const inRaw = rawData[i * 4 + 3] > 40;
-          if (!inRaw) continue;
-          const a = px[i * 4 + 3];
-          const rr = px[i * 4], gg = px[i * 4 + 1], bv = px[i * 4 + 2];
-          const dist = bN > 0 ? Math.sqrt((rr - br) ** 2 + (gg - bg) ** 2 + (bv - bb) ** 2) : 999;
-          const isBg = a < 30 || (bN > 0 && dist <= tol);
-          od.data[i * 4] = 255; od.data[i * 4 + 1] = 255; od.data[i * 4 + 2] = 255;
-          od.data[i * 4 + 3] = isBg ? 255 : 0;
-        }
-        const tmp = document.createElement('canvas'); tmp.width = bw; tmp.height = bh;
-        tmp.getContext('2d').putImageData(od, 0, 0);
-        const out = document.createElement('canvas'); out.width = W; out.height = H;
-        out.getContext('2d').drawImage(tmp, minX, minY);
-        return { mask: out, recognized: true };
-      }
+      return [r, g, b];
+    };
+
+    // seed colour models from the MARGIN only (outside the loop), where the
+    // current alpha can still be trusted: transparent -> background sample,
+    // opaque -> object sample. With no alpha here, the whole margin is treated
+    // as background (the user framed it by leaving room around the object).
+    const bgIdx = [], fgIdx = [];
+    for (let i = 0; i < total; i++) {
+      if (inLoop[i]) continue;
+      if (!hasAlpha) { bgIdx.push(i); continue; }
+      const a = al[i * 4 + 3];
+      if (a < 40) bgIdx.push(i); else if (a > 200) fgIdx.push(i);
     }
-    // COLOR PATH: estimate background from the margin ring, then erase pixels
-    // inside the loop that match the background color.
-    const marginIdx = [];
-    for (let i = 0; i < total; i++) { if (rawData[i * 4 + 3] <= 40) marginIdx.push(i); }
-    if (marginIdx.length < Math.max(20, total * 0.02)) return { mask: raw, recognized: false };
-    const stepN = Math.max(1, Math.floor(marginIdx.length / 600));
-    let samples = [];
-    for (let k = 0; k < marginIdx.length; k += stepN) { const i = marginIdx[k]; samples.push([px[i * 4], px[i * 4 + 1], px[i * 4 + 2]]); }
-    let br = 0, bg = 0, bb = 0;
-    for (const sm of samples) { br += sm[0]; bg += sm[1]; bb += sm[2]; }
-    br /= samples.length; bg /= samples.length; bb /= samples.length;
-    let pool = samples;
-    for (let it = 0; it < 3; it++) {
-      const ranked = pool.map(sm => ({ sm, d: (sm[0] - br) ** 2 + (sm[1] - bg) ** 2 + (sm[2] - bb) ** 2 }));
-      ranked.sort((a, b) => a.d - b.d);
-      pool = ranked.slice(0, Math.max(8, Math.floor(ranked.length * 0.65))).map(w => w.sm);
-      br = 0; bg = 0; bb = 0;
-      for (const sm of pool) { br += sm[0]; bg += sm[1]; bb += sm[2]; }
-      br /= pool.length; bg /= pool.length; bb /= pool.length;
-    }
-    let close = 0;
-    for (const i of marginIdx) {
-      const rr = px[i * 4], gg = px[i * 4 + 1], bv = px[i * 4 + 2];
-      if (Math.sqrt((rr - br) ** 2 + (gg - bg) ** 2 + (bv - bb) ** 2) < 55) close++;
-    }
-    if (close / marginIdx.length < 0.45) return { mask: raw, recognized: false };
+    const need = Math.max(20, total * 0.01);
+    const bg = bgIdx.length >= need ? trimmedAvg(bgIdx) : null;
+    const fg = (hasAlpha && fgIdx.length >= need) ? trimmedAvg(fgIdx) : null;
+    if (!bg && !fg) return null;
 
     const tol = this.effTol();
-    const od = cctx.createImageData(bw, bh);
+    const t = Math.max(tol, 40); // floor so the tight default tol still admits noise/AA
+    const isObj = new Uint8Array(total);
     for (let i = 0; i < total; i++) {
-      const inRaw = rawData[i * 4 + 3] > 40;
-      const rr = px[i * 4], gg = px[i * 4 + 1], bv = px[i * 4 + 2];
-      const dist = Math.sqrt((rr - br) ** 2 + (gg - bg) ** 2 + (bv - bb) ** 2);
-      // erase = inside loop AND matches background color
-      const on = inRaw && dist <= tol;
-      od.data[i * 4] = 255; od.data[i * 4 + 1] = 255; od.data[i * 4 + 2] = 255; od.data[i * 4 + 3] = on ? 255 : 0;
+      const r = col[i * 4], g = col[i * 4 + 1], b = col[i * 4 + 2];
+      const dB = bg ? Math.sqrt((r - bg[0]) ** 2 + (g - bg[1]) ** 2 + (b - bg[2]) ** 2) : Infinity;
+      const dF = fg ? Math.sqrt((r - fg[0]) ** 2 + (g - fg[1]) ** 2 + (b - fg[2]) ** 2) : Infinity;
+      let obj;
+      if (fg && bg) obj = dF <= dB;      // nearest colour model
+      else if (bg) obj = dB > t;         // "not background"
+      else obj = dF <= t;                // "is foreground"
+      isObj[i] = obj ? 1 : 0;
     }
+
+    // reliability: only trust the result when there's a real edge to snap to.
+    let reliable = true;
+    if (fg && bg) {
+      const c = Math.sqrt((fg[0] - bg[0]) ** 2 + (fg[1] - bg[1]) ** 2 + (fg[2] - bg[2]) ** 2);
+      if (c < 20) reliable = false; // object ~ background: can't separate them
+    } else if (bg) {
+      // background-only: if the loop interior doesn't differ from the margin at
+      // all, the "background" is really just more object (loop drawn deep
+      // inside the subject) — nothing to recognize here.
+      let io = 0, iN = 0;
+      for (let i = 0; i < total; i++) { if (!inLoop[i]) continue; iN++; if (isObj[i]) io++; }
+      if (iN > 0 && io / iN < 0.05) reliable = false;
+    }
+
+    return { minX, minY, bw, bh, inLoop, isObj, reliable };
+  }
+
+  // paint a crop-sized on/off mask onto a full WxH white mask canvas.
+  paintMask(minX, minY, bw, bh, on) {
     const tmp = document.createElement('canvas'); tmp.width = bw; tmp.height = bh;
-    tmp.getContext('2d').putImageData(od, 0, 0);
+    const tctx = tmp.getContext('2d');
+    const od = tctx.createImageData(bw, bh);
+    for (let i = 0; i < bw * bh; i++) { od.data[i * 4] = 255; od.data[i * 4 + 1] = 255; od.data[i * 4 + 2] = 255; od.data[i * 4 + 3] = on[i] ? 255 : 0; }
+    tctx.putImageData(od, 0, 0);
+    const { W, H } = this._work;
     const out = document.createElement('canvas'); out.width = W; out.height = H;
     out.getContext('2d').drawImage(tmp, minX, minY);
-    return { mask: out, recognized: true };
+    return out;
+  }
+
+  // ADD: the user circled a region to bring BACK into the object. Add the
+  // pixels there that belong to the object, snapping the outer edge to the
+  // real boundary. Object = classified object (segmentLoop) OR a
+  // background-coloured pocket that's walled off from the outside by object
+  // (e.g. a light belly enclosed by a darker body) — found by flood-filling
+  // background inward from the crop border and keeping whatever it can't
+  // reach. This adds edge-connected missing parts (a limb at the silhouette),
+  // which the old connectivity-only path could never recover, while still
+  // trimming background that leaks into the loop from outside. Widening rings
+  // give small touch-up strokes a real chance to find background; if none is
+  // reliable we add the drawn shape as-is so the stroke still does something.
+  refineAddMask(pts) {
+    const raw = this.rawLassoMask(pts);
+    if (!this._raster || !this.state.magnetic) return { mask: raw, recognized: false };
+    for (const ratio of [0.18, 0.4, 0.85]) {
+      const S = this.segmentLoop(pts, ratio);
+      if (!S || !S.reliable) continue;
+      const { minX, minY, bw, bh, inLoop, isObj } = S;
+      const total = bw * bh;
+      // flood-fill background (non-object) inward from the crop border
+      const reach = new Uint8Array(total);
+      const stack = [];
+      const seed = (i) => { if (!isObj[i] && !reach[i]) { reach[i] = 1; stack.push(i); } };
+      for (let x = 0; x < bw; x++) { seed(x); seed((bh - 1) * bw + x); }
+      for (let y = 0; y < bh; y++) { seed(y * bw); seed(y * bw + bw - 1); }
+      while (stack.length) {
+        const i = stack.pop(), x = i % bw, y = (i / bw) | 0;
+        if (x > 0) seed(i - 1); if (x < bw - 1) seed(i + 1);
+        if (y > 0) seed(i - bw); if (y < bh - 1) seed(i + bw);
+      }
+      const on = new Uint8Array(total);
+      let kept = 0, loopN = 0;
+      for (let i = 0; i < total; i++) {
+        if (!inLoop[i]) continue;
+        loopN++;
+        if (isObj[i] || !reach[i]) { on[i] = 1; kept++; } // object, or enclosed pocket
+      }
+      if (loopN > 0 && kept / loopN < 0.12) continue; // added almost nothing: widen, then fall back
+      return { mask: this.paintMask(minX, minY, bw, bh, on), recognized: true };
+    }
+    return { mask: raw, recognized: false };
+  }
+
+  // EXCLUDE: the user circled a region to trim. Erase the background side
+  // inside the loop, keeping object pixels intact so the cut snaps to the real
+  // edge instead of shaving into the object. Interior background holes are
+  // erased too (no connectivity requirement), unlike add. If the loop is
+  // essentially all object there's no background sliver to clean — the user
+  // means "remove this whole chunk", so erase the drawn shape as-is.
+  refineSubMask(pts) {
+    const raw = this.rawLassoMask(pts);
+    if (!this._raster || !this.state.magnetic) return { mask: raw, recognized: false };
+    for (const ratio of [0.18, 0.4, 0.85]) {
+      const S = this.segmentLoop(pts, ratio);
+      if (!S || !S.reliable) continue;
+      const { minX, minY, bw, bh, inLoop, isObj } = S;
+      const total = bw * bh;
+      const on = new Uint8Array(total);
+      let erase = 0, loopN = 0;
+      for (let i = 0; i < total; i++) {
+        if (!inLoop[i]) continue;
+        loopN++;
+        if (!isObj[i]) { on[i] = 1; erase++; } // background inside the loop
+      }
+      if (loopN > 0 && erase / loopN < 0.12) continue; // basically all object: widen, then erase the whole shape
+      return { mask: this.paintMask(minX, minY, bw, bh, on), recognized: true };
+    }
+    return { mask: raw, recognized: false };
   }
   commitLasso() {
     const pts = this.state.lassoPts;
