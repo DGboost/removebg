@@ -36,7 +36,6 @@ interface State {
   engineMsg: string;
   lassoOp: LassoOp;
   magnetic: boolean;
-  selMaskUrl: string | null;
   hasLassoSel: boolean;
   brushPts: Pt[];
   brushSize: number;
@@ -87,6 +86,36 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
   private strokeZone: HTMLCanvasElement | null = null;
   private strokeOp: LassoOp = "new";
   private dragStart: { fx: number; fy: number } | null = null;
+  // live selection overlay: the engine paints the current selection into this
+  // canvas cheaply on every pointer move (no toDataURL), so brushing/lassoing
+  // stays smooth instead of re-encoding a PNG per move.
+  private overlayRef = React.createRef<HTMLCanvasElement>();
+  // Pointer strokes can fire far faster than the screen refreshes. Points are
+  // accumulated in these buffers (never lost), while React re-renders — the
+  // expensive part, since render() rebuilds the whole editor tree — are
+  // coalesced to at most one per animation frame via scheduleState().
+  private lassoBuf: Pt[] = [];
+  private brushBuf: Pt[] = [];
+  private rafId: number | null = null;
+  private pendingState: Partial<State> | null = null;
+
+  private scheduleState(patch: Partial<State>) {
+    this.pendingState = this.pendingState ? { ...this.pendingState, ...patch } : patch;
+    if (this.rafId === null) this.rafId = requestAnimationFrame(this.flushState);
+  }
+  private flushState = () => {
+    this.rafId = null;
+    const p = this.pendingState;
+    this.pendingState = null;
+    if (p) this.setState(p as State);
+  };
+  private cancelScheduled() {
+    if (this.rafId !== null) {
+      cancelAnimationFrame(this.rafId);
+      this.rafId = null;
+    }
+    this.pendingState = null;
+  }
 
   state: State = {
     view: "home",
@@ -110,7 +139,6 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
     engineMsg: "",
     lassoOp: "new",
     magnetic: true,
-    selMaskUrl: null,
     hasLassoSel: false,
     brushPts: [],
     brushSize: 30,
@@ -127,13 +155,25 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
   componentWillUnmount() {
     document.removeEventListener("paste", this.onPaste);
     if (this.toastTimer) clearTimeout(this.toastTimer);
+    this.cancelScheduled();
   }
 
   componentDidUpdate(prevProps: RemoveBgToolProps) {
     if (prevProps.model !== this.props.model) {
       this.setState({ engine: "idle", engineMsg: "" });
     }
+    // keep the live selection overlay in sync with the engine's _selCanvas.
+    // Cheap (two drawImage calls), so running it after every render is fine and
+    // covers mount, stroke commits, and tool switches without extra plumbing.
+    if ((this.state.tool === "lasso" || this.state.tool === "brush") && !this.state.processing) {
+      this.paintOverlay();
+    }
   }
+
+  private paintOverlay = () => {
+    const dom = this.overlayRef.current;
+    if (dom) this.engine.renderSelOverlay(dom, this.props.accent || "#3d5afe");
+  };
 
   private async seed() {
     try {
@@ -261,7 +301,6 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
       brushPts: [],
       tool: "auto",
       compareOn: false,
-      selMaskUrl: null,
       hasLassoSel: false,
       lassoOp: "new",
     });
@@ -283,13 +322,13 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
     return this.state.tolTouched ? this.state.tol : this.props.autoTol ?? 60;
   }
   private setTool = (t: Tool) => {
+    this.engine.clearSelection();
     this.setState({
       tool: t,
       sel: null,
       lassoPts: [],
       wandPt: null,
       compareOn: false,
-      selMaskUrl: null,
       hasLassoSel: false,
       lassoOp: "new",
       brushPts: [],
@@ -299,15 +338,16 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
     if (t === "lasso" || t === "brush") {
       const img = this.state.editorImage;
       if (img) {
-        void this.engine.prepLasso(img.photo, this.state.resultSrc).then(({ url, has }) => {
-          this.setState({ selMaskUrl: url, hasLassoSel: has });
+        void this.engine.prepLasso(img.photo, this.state.resultSrc).then(({ has }) => {
+          this.setState({ hasLassoSel: has });
         });
       }
     }
   };
   private resetSel = () => {
     this.engine.clearSelection();
-    this.setState({ sel: null, lassoPts: [], wandPt: null, brushPts: [], selMaskUrl: null, hasLassoSel: false, lassoOp: "new" });
+    this.paintOverlay();
+    this.setState({ sel: null, lassoPts: [], wandPt: null, brushPts: [], hasLassoSel: false, lassoOp: "new" });
   };
   private onTol = (e: React.ChangeEvent<HTMLInputElement>) => this.setState({ tol: +e.target.value, tolTouched: true });
   private toggleCompare = (e: React.ChangeEvent<HTMLInputElement>) => this.setState({ compareOn: !!e.target.checked });
@@ -364,7 +404,20 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
       return;
     }
     const wait = Math.max(0, 350 - (Date.now() - t0));
-    setTimeout(() => this.setState({ processing: false, processed: true, resultSrc: out, compareOn: false }), wait);
+    setTimeout(() => {
+      this.setState({ processing: false, processed: true, resultSrc: out, compareOn: false }, () => {
+        // For lasso/brush, rebuild the engine's working raster from the NEW
+        // result so the next stroke sees the current cut's transparency (its
+        // real object/background boundary). Without this, add/exclude after the
+        // first stroke analyze a stale raster and misbehave.
+        const { tool, editorImage } = this.state;
+        if ((tool === "lasso" || tool === "brush") && editorImage) {
+          void this.engine.prepLasso(editorImage.photo, out).then(({ has }) => {
+            this.setState({ hasLassoSel: has }, () => this.paintOverlay());
+          });
+        }
+      });
+    }, wait);
   };
 
   // ---------- pointer ----------
@@ -381,13 +434,15 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
       this.dragStart = { fx, fy };
       this.setState({ dragging: true, processed: false, sel: { x: fx, y: fy, w: 0, h: 0 }, lassoPts: [] });
     } else if (t === "lasso") {
+      this.lassoBuf = [[fx, fy]];
       this.setState({ dragging: true, processed: false, lassoPts: [[fx, fy]] });
     } else if (t === "brush") {
-      this.setState({ dragging: true, processed: false, brushPts: [[fx, fy]] });
-      // draw first dot immediately for instant feedback
+      // draw first dot immediately for instant feedback; the overlay canvas is
+      // repainted cheaply (no per-move PNG encoding).
+      this.brushBuf = [[fx, fy]];
       this.engine.paintBrushDot([fx, fy], this.state.brushSize, this.state.brushOp, null);
-      const { url } = this.engine.buildSelOverlay(this.props.accent);
-      this.setState({ selMaskUrl: url });
+      this.paintOverlay();
+      this.setState({ dragging: true, processed: false, brushPts: [[fx, fy]], hasLassoSel: true });
     } else if (t === "click") {
       this.setState({ wandPt: [fx, fy] }, () => void this.runRemoval());
     }
@@ -404,47 +459,50 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
       py = e.clientY - r.top;
     const t = this.state.tool;
     if (t === "brush" && !this.state.dragging) {
-      this.setState({ cursorPos: [px, py] });
+      this.scheduleState({ cursorPos: [px, py] });
       return;
     }
     if (!this.state.dragging) return;
     const [fx, fy] = this.frac(e);
     if (t === "rect") {
       const d = this.dragStart!;
-      this.setState({ sel: { x: Math.min(d.fx, fx), y: Math.min(d.fy, fy), w: Math.abs(fx - d.fx), h: Math.abs(fy - d.fy) } });
+      this.scheduleState({ sel: { x: Math.min(d.fx, fx), y: Math.min(d.fy, fy), w: Math.abs(fx - d.fx), h: Math.abs(fy - d.fy) } });
     } else if (t === "lasso") {
       const p: Pt = [fx, fy];
-      const pts = this.state.lassoPts.slice();
-      const last = pts[pts.length - 1];
+      const last = this.lassoBuf[this.lassoBuf.length - 1];
       if (!last || Math.hypot(p[0] - last[0], p[1] - last[1]) > 0.006) {
-        pts.push(p);
-        this.setState({ lassoPts: pts });
+        this.lassoBuf.push(p);
+        this.scheduleState({ lassoPts: this.lassoBuf.slice() });
       }
     } else if (t === "brush") {
       const p: Pt = [fx, fy];
-      const pts = this.state.brushPts.slice();
-      const last = pts[pts.length - 1] ?? null;
+      const last = this.brushBuf[this.brushBuf.length - 1] ?? null;
       if (!last || Math.hypot(p[0] - last[0], p[1] - last[1]) > 0.004) {
-        pts.push(p);
-        // real-time preview: draw the brush dot immediately so the user sees
-        // where they're painting as they paint.
+        this.brushBuf.push(p);
+        // draw the dot straight onto the engine's selection canvas and repaint
+        // the overlay right away, so painting feels immediate even though the
+        // React re-render (brushPts/cursor) is coalesced to one per frame.
         this.engine.paintBrushDot(p, this.state.brushSize, this.state.brushOp, last);
-        this.setState({ brushPts: pts, cursorPos: [px, py] });
-        const { url } = this.engine.buildSelOverlay(this.props.accent);
-        this.setState({ selMaskUrl: url });
+        this.paintOverlay();
+        this.scheduleState({ brushPts: this.brushBuf.slice(), cursorPos: [px, py] });
+      } else {
+        this.scheduleState({ cursorPos: [px, py] });
       }
     }
   };
 
   private onUp = () => {
+    // drop any queued (throttled) point update — commit reads the full buffers.
+    this.cancelScheduled();
     if (this.state.tool === "lasso" && this.state.dragging) this.commitLasso();
     if (this.state.tool === "brush" && this.state.dragging) this.commitBrush();
     this.setState({ dragging: false });
   };
 
   private commitLasso() {
-    const pts = this.state.lassoPts;
+    const pts = this.lassoBuf;
     if (pts.length < 3 || !this.engine.work) {
+      this.lassoBuf = [];
       this.setState({ lassoPts: [] });
       return;
     }
@@ -474,16 +532,17 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
     this.strokeZone = zone;
     this.strokeOp = op;
     this.engine.drawLassoStroke(mask, op);
-    const { url, has } = this.engine.buildSelOverlay(this.props.accent);
+    this.lassoBuf = [];
     this.setState(
-      { lassoPts: [], selMaskUrl: url, hasLassoSel: has, lassoOp: op === "new" ? "add" : op },
+      { lassoPts: [], hasLassoSel: this.engine.hasSelection(), lassoOp: op === "new" ? "add" : op },
       () => void this.runRemoval(),
     );
   }
 
   private commitBrush() {
-    const pts = this.state.brushPts;
+    const pts = this.brushBuf;
     if (pts.length < 1 || !this.engine.work) {
+      this.brushBuf = [];
       this.setState({ brushPts: [] });
       return;
     }
@@ -495,8 +554,8 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
     this.strokeMask = mask;
     this.strokeZone = mask;
     this.strokeOp = op;
-    const { url, has } = this.engine.buildSelOverlay(this.props.accent);
-    this.setState({ brushPts: [], selMaskUrl: url, hasLassoSel: has }, () => void this.runRemoval());
+    this.brushBuf = [];
+    this.setState({ brushPts: [], hasLassoSel: this.engine.hasSelection() }, () => void this.runRemoval());
   }
 
   // ---------- gallery / save ----------
@@ -927,7 +986,7 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
     const lassoStr = s.lassoPts.map((p) => (p[0] * 100).toFixed(2) + "," + (p[1] * 100).toFixed(2)).join(" ");
     const showRect = tool === "rect" && !!s.sel && s.sel.w > 0;
     const showLasso = tool === "lasso" && s.lassoPts.length > 1;
-    const showSelMask = (tool === "lasso" || tool === "brush") && !!s.selMaskUrl && !s.processing;
+    const showSelMask = (tool === "lasso" || tool === "brush") && !s.processing;
     const showClickHint = tool === "click" && !s.processing && !s.processed;
     const showDone = s.processed && !s.processing && !s.compareOn;
     const showPrimary = !!s.editorImage && !s.processed && tool !== "click" && tool !== "brush";
@@ -1196,10 +1255,9 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
                 <img src={stageSrc} alt="edit" style={{ display: "block", maxWidth: "min(660px,60vw)", maxHeight: "56vh", objectFit: "contain", userSelect: "none", WebkitUserDrag: "none" } as CSSProperties} />
 
                 {showSelMask && (
-                  <img
-                    src={s.selMaskUrl!}
-                    alt="selection"
-                    style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "fill", pointerEvents: "none", mixBlendMode: "multiply" }}
+                  <canvas
+                    ref={this.overlayRef}
+                    style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", mixBlendMode: "multiply", opacity: 0.42 }}
                   />
                 )}
 

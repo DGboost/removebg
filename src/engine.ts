@@ -290,12 +290,12 @@ export class RemoveBgEngine {
       if (resultSrc) {
         const cur = await this.loadImage(resultSrc);
         this._selCtx.drawImage(cur, 0, 0, W, H);
-        return this.buildSelOverlay("#3d5afe");
+        return { has: this.hasSelection() };
       }
-      return { url: null, has: false };
+      return { has: false };
     } catch {
       this._raster = null;
-      return { url: null, has: false };
+      return { has: false };
     }
   }
 
@@ -573,6 +573,37 @@ export class RemoveBgEngine {
     }
     octx.putImageData(od, 0, 0);
     return { url: o.toDataURL(), has };
+  }
+
+  // cheap "is anything selected?" check (no toDataURL) for gating UI.
+  hasSelection(): boolean {
+    if (!this._work || !this._selCtx) return false;
+    const { W, H } = this._work;
+    const d = this._selCtx.getImageData(0, 0, W, H).data;
+    for (let i = 3; i < d.length; i += 4) if (d[i] > 12) return true;
+    return false;
+  }
+
+  // Render the current selection (_selCanvas, white-alpha) into a visible DOM
+  // overlay canvas, tinted to the accent color. This is deliberately cheap —
+  // two drawImage calls, no getImageData / no toDataURL — so it can run on
+  // every pointer move during a brush stroke without janking. The caller sizes
+  // it over the image and softens it with CSS opacity.
+  renderSelOverlay(dom: HTMLCanvasElement, accent: string) {
+    if (!this._work || !this._selCanvas) return;
+    const { W, H } = this._work;
+    if (dom.width !== W) dom.width = W;
+    if (dom.height !== H) dom.height = H;
+    const x = dom.getContext("2d");
+    if (!x) return;
+    x.globalCompositeOperation = "source-over";
+    x.clearRect(0, 0, W, H);
+    x.fillStyle = accent;
+    x.fillRect(0, 0, W, H);
+    // keep the accent only where the selection has alpha
+    x.globalCompositeOperation = "destination-in";
+    x.drawImage(this._selCanvas, 0, 0);
+    x.globalCompositeOperation = "source-over";
   }
 
   // ---- shared local object/background segmentation for add & exclude ----
@@ -962,31 +993,52 @@ export class RemoveBgEngine {
   }
 
   // ---------- brush ----------
-  // Build a mask from brush strokes: each point becomes a filled circle of
-  // brushSize radius.
+  // Build a mask from a brush stroke. brushSize is the brush DIAMETER (the same
+  // footprint the on-screen cursor ring shows), so the radius is brushSize/2.
+  // Consecutive points are joined with a round-capped stroke of that diameter —
+  // NOT just discrete dots — otherwise a fast drag (whose sampled points are
+  // spaced far apart) leaves gaps and the committed result looks broken even
+  // though the live preview (which is stroked) looked continuous.
   brushMask(pts: Pt[], brushSize: number) {
     const { W, H } = this._work!;
     const c = document.createElement("canvas");
     c.width = W;
     c.height = H;
     const ctx = c.getContext("2d")!;
+    const r = brushSize / 2;
     ctx.fillStyle = "#fff";
-    for (const p of pts) {
+    ctx.strokeStyle = "#fff";
+    ctx.lineWidth = brushSize;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    if (pts.length === 1) {
+      const p = pts[0];
       ctx.beginPath();
-      ctx.arc(p[0] * W, p[1] * H, brushSize, 0, Math.PI * 2);
+      ctx.arc(p[0] * W, p[1] * H, r, 0, Math.PI * 2);
       ctx.fill();
+    } else {
+      ctx.beginPath();
+      pts.forEach((p, i) => {
+        const X = p[0] * W,
+          Y = p[1] * H;
+        i ? ctx.lineTo(X, Y) : ctx.moveTo(X, Y);
+      });
+      ctx.stroke();
     }
     return c;
   }
 
-  // live preview while dragging: paint directly onto the selection overlay
+  // live preview while dragging: paint directly onto the selection overlay.
+  // Sizing matches brushMask (radius = brushSize/2, stroke width = brushSize)
+  // so the preview and the committed result are identical.
   paintBrushDot(p: Pt, brushSize: number, op: "add" | "sub", last: Pt | null) {
     if (!this._selCtx || !this._work) return;
     const { W, H } = this._work;
+    const r = brushSize / 2;
     this._selCtx.globalCompositeOperation = op === "sub" ? "destination-out" : "source-over";
     if (last) {
       this._selCtx.strokeStyle = "#fff";
-      this._selCtx.lineWidth = brushSize * 2;
+      this._selCtx.lineWidth = brushSize;
       this._selCtx.lineCap = "round";
       this._selCtx.lineJoin = "round";
       this._selCtx.beginPath();
@@ -995,7 +1047,7 @@ export class RemoveBgEngine {
       this._selCtx.stroke();
     }
     this._selCtx.beginPath();
-    this._selCtx.arc(p[0] * W, p[1] * H, brushSize, 0, Math.PI * 2);
+    this._selCtx.arc(p[0] * W, p[1] * H, r, 0, Math.PI * 2);
     this._selCtx.fillStyle = "#fff";
     this._selCtx.fill();
     this._selCtx.globalCompositeOperation = "source-over";
