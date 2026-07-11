@@ -36,11 +36,18 @@ import { RemoveBgTool } from "removebg";
 ## Run locally
 
 ```bash
+./start.sh [포트]   # 기본 5173. 의존성 없으면 자동 설치 후 백그라운드로 vite 기동
+./stop.sh [포트]    # 시작할 때 쓴 포트로 종료 (인자 생략 시 마지막 시작 포트 사용)
+```
+
+or directly via npm:
+
+```bash
 npm install
 npm run dev   # vite dev server on http://localhost:5173, mounts <RemoveBgTool /> standalone
 ```
 
-`demo/` is a minimal Vite harness for previewing the component in a browser on its own — it's dev-only and not part of the published package (see `package.json` "files").
+`demo/` is a minimal Vite harness for previewing the component in a browser on its own — it's dev-only and not part of the published package (see `package.json` "files"). `start.sh`/`stop.sh` track the server by the port it's bound to (not by PID) — `npm run dev` hands off to a `vite` subprocess, and killing by parent PID misses it once `npm` exits.
 
 ## Develop
 
