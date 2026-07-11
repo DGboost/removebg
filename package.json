@@ -1,0 +1,11 @@
+{
+  "name": "removebg",
+  "version": "1.0.0",
+  "private": true,
+  "description": "누끼컷 - standalone background removal tool, embeddable via iframe",
+  "files": [
+    "누끼컷.dc.html",
+    "support.js",
+    "README.md"
+  ]
+}
