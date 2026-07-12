@@ -149,7 +149,11 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
 
   componentDidMount() {
     document.addEventListener("paste", this.onPaste);
-    void this.seed();
+    if (this.props.storage) {
+      void this.loadFromStorage();
+    } else {
+      void this.seed();
+    }
   }
 
   componentWillUnmount() {
@@ -174,6 +178,17 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
     const dom = this.overlayRef.current;
     if (dom) this.engine.renderSelOverlay(dom, this.props.accent || "#3d5afe");
   };
+
+  private async loadFromStorage() {
+    const storage = this.props.storage;
+    if (!storage) return;
+    try {
+      const items = await storage.load();
+      this.setState({ saved: Array.isArray(items) ? items : [] });
+    } catch {
+      this.flash("보관함을 불러오지 못했어요");
+    }
+  }
 
   private async seed() {
     try {
@@ -565,7 +580,7 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
     this.toastTimer = setTimeout(() => this.setState({ toast: "" }), 2200);
   };
   private onFolder = (e: React.ChangeEvent<HTMLSelectElement>) => this.setState({ saveFolder: e.target.value });
-  private saveCurrent = () => {
+  private saveCurrent = async () => {
     if (!this.state.resultSrc) return;
     const sc = this.state.editorImage!;
     const item: SavedItem = {
@@ -577,25 +592,137 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
       folder: this.state.saveFolder,
       ts: Date.now(),
     };
+    const storage = this.props.storage;
+    if (storage) {
+      try {
+        this.flash("저장 중…");
+        const saved = await storage.save(item);
+        this.setState((s) => ({
+          saved: [saved, ...s.saved.filter((i) => i.id !== saved.id)],
+        }));
+        this.flash("보관함에 저장했어요");
+      } catch {
+        this.flash("저장에 실패했어요");
+      }
+      return;
+    }
     this.setState((s) => ({ saved: [item, ...s.saved] }));
     this.flash("보관함에 저장했어요");
   };
-  private download = (item: { src: string; name: string }) => {
-    const a = document.createElement("a");
-    a.href = item.src;
-    a.download = (item.name || "cutout") + ".png";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+  /**
+   * Reliable PNG download for data URLs *and* server paths.
+   * A plain `<a download href="/api/uploads/...">` often fails (no Content-Disposition,
+   * proxy/CORS, or the browser ignores `download` for non-same-origin absolute URLs).
+   * Fetch → Blob → object URL works consistently.
+   */
+  private download = async (item: { src: string; name: string }) => {
+    if (!item.src) {
+      this.flash("다운로드할 이미지가 없어요");
+      return;
+    }
+    const baseName = (item.name || "cutout")
+      .replace(/\.[a-z0-9]+$/i, "")
+      .replace(/[\\/:*?"<>|]+/g, "_")
+      .trim() || "cutout";
+    const filename = `${baseName}.png`;
+    let objectUrl: string | null = null;
+    try {
+      let href = item.src;
+      if (!item.src.startsWith("data:") && !item.src.startsWith("blob:")) {
+        const res = await fetch(item.src, { credentials: "include" });
+        if (!res.ok) throw new Error(`download fetch failed: ${res.status}`);
+        const blob = await res.blob();
+        // Force PNG download name even if server served jpeg/webp.
+        objectUrl = URL.createObjectURL(blob);
+        href = objectUrl;
+      }
+      const a = document.createElement("a");
+      a.href = href;
+      a.download = filename;
+      a.rel = "noopener";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      this.flash("PNG를 다운로드했어요");
+    } catch {
+      // Last resort: open in a new tab so the user can still save manually.
+      try {
+        window.open(item.src, "_blank", "noopener,noreferrer");
+        this.flash("새 탭에서 열어 저장해 주세요");
+      } catch {
+        this.flash("다운로드에 실패했어요");
+      }
+    } finally {
+      if (objectUrl) {
+        // Delay revoke so the browser has time to start the download.
+        setTimeout(() => URL.revokeObjectURL(objectUrl!), 2000);
+      }
+    }
   };
   private downloadCurrent = () => {
     if (!this.state.resultSrc) return;
-    this.download({ src: this.state.resultSrc, name: (this.state.editorImage && this.state.editorImage.name) || "cutout" });
-    this.flash("PNG를 다운로드했어요");
+    void this.download({
+      src: this.state.resultSrc,
+      name: (this.state.editorImage && this.state.editorImage.name) || "cutout",
+    });
   };
-  private toggleFav = (id: string) => this.setState((s) => ({ saved: s.saved.map((i) => (i.id === id ? { ...i, fav: !i.fav } : i)) }));
-  private deleteItem = (id: string) => this.setState((s) => ({ saved: s.saved.filter((i) => i.id !== id) }));
-  private reeditItem = (it: SavedItem) => this.openEditor({ id: it.id, name: it.name, photo: it.photo });
+  private toggleFav = async (id: string) => {
+    const cur = this.state.saved.find((i) => i.id === id);
+    if (!cur) return;
+    const nextFav = !cur.fav;
+    this.setState((s) => ({
+      saved: s.saved.map((i) => (i.id === id ? { ...i, fav: nextFav } : i)),
+    }));
+    const storage = this.props.storage;
+    if (storage) {
+      try {
+        await storage.update(id, { fav: nextFav });
+      } catch {
+        this.setState((s) => ({
+          saved: s.saved.map((i) => (i.id === id ? { ...i, fav: cur.fav } : i)),
+        }));
+        this.flash("즐겨찾기 변경에 실패했어요");
+      }
+    }
+  };
+  private deleteItem = async (id: string) => {
+    const prev = this.state.saved;
+    this.setState((s) => ({ saved: s.saved.filter((i) => i.id !== id) }));
+    const storage = this.props.storage;
+    if (storage) {
+      try {
+        await storage.remove(id);
+        this.flash("삭제했어요");
+      } catch {
+        this.setState({ saved: prev });
+        this.flash("삭제에 실패했어요");
+      }
+    }
+  };
+  /**
+   * Re-open a gallery item for further editing.
+   * - `photo` = original (for color sampling / compare / magnetic lasso). Falls back to cutout.
+   * - `resultSrc` = saved cutout so the canvas starts on the processed image, not the raw original.
+   */
+  private reeditItem = (it: SavedItem) => {
+    const original = it.photo || it.src;
+    const cutout = it.src || it.photo;
+    this.setState({
+      view: "editor",
+      editorImage: { id: it.id, name: it.name, photo: original },
+      processed: !!cutout,
+      processing: false,
+      resultSrc: cutout || null,
+      sel: null,
+      lassoPts: [],
+      wandPt: null,
+      brushPts: [],
+      tool: "auto",
+      compareOn: false,
+      hasLassoSel: false,
+      lassoOp: "new",
+    });
+  };
   private filterSaved() {
     const { saved, filter } = this.state;
     if (filter === "all") return saved;

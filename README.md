@@ -57,7 +57,25 @@ npm run typecheck
 npm run build   # tsup -> dist/{index.js,index.cjs,index.d.ts}
 ```
 
+## Persistence (보관함)
+
+By default the gallery is in-memory (demo seed on mount). Pass a `storage` adapter to persist items:
+
+```tsx
+import { RemoveBgTool, type RemoveBgStorage } from "removebg";
+
+const storage: RemoveBgStorage = {
+  load: () => api.list(),
+  save: (item) => api.save(item),   // may receive data-URL src/photo
+  update: (id, patch) => api.patch(id, patch),
+  remove: (id) => api.delete(id),
+};
+
+<RemoveBgTool storage={storage} />
+```
+
+When `storage` is set, the demo seed is skipped and load/save/fav/delete go through the adapter.
+
 ## Notes
 
-- The "보관함" (saved items) gallery is in-memory only for now — it resets on reload. Add persistence (e.g. `localStorage`) if that's needed downstream.
 - This package was rewritten from a generated HTML/JS prototype into real TypeScript/React source (see `src/`); `git log` on this repo predates that rewrite.
