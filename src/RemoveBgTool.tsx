@@ -30,7 +30,6 @@ interface State {
   tolTouched: boolean;
   saved: SavedItem[];
   filter: string;
-  saveFolder: string;
   toast: string;
   engine: EngineStatus;
   engineMsg: string;
@@ -44,32 +43,74 @@ interface State {
   dropActive: boolean;
 }
 
-const FOLDERS = ["제품", "소품", "기타"];
 
 const GLOBAL_CSS = `
 .rbg-root *{box-sizing:border-box}
-.rbg-root{height:100%;font-family:'Pretendard',system-ui,-apple-system,sans-serif;color:#17171a;background:#fff;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+.rbg-root{
+  height:100%;font-family:'Pretendard',system-ui,-apple-system,sans-serif;
+  --rbg-page:#fff;
+  --rbg-bg:#fff;
+  --rbg-surface:#fff;
+  --rbg-surface-soft:#f7f7f8;
+  --rbg-panel:#fcfcfd;
+  --rbg-canvas:#f5f5f7;
+  --rbg-border:#ececec;
+  --rbg-border-soft:#ededed;
+  --rbg-border-strong:#d7d7dd;
+  --rbg-text:#17171a;
+  --rbg-text-muted:#6b6b72;
+  --rbg-text-subtle:#9a9aa2;
+  --rbg-text-faint:#c0c0c6;
+  --rbg-scrollbar:#e4e4e8;
+  --rbg-toast-bg:#17171a;
+  --rbg-danger:#e0553d;
+  --rbg-danger-bg:#fdeceb;
+  color:var(--rbg-text);background:var(--rbg-bg);
+  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility
+}
+html[data-theme="dark"] .rbg-root{
+  --rbg-bg:#1c1d1f;
+  --rbg-surface:#1c1d1f;
+  --rbg-surface-soft:rgba(255,255,255,.05);
+  --rbg-panel:#131314;
+  --rbg-canvas:#131314;
+  --rbg-border:rgba(255,255,255,.12);
+  --rbg-border-soft:rgba(255,255,255,.09);
+  --rbg-border-strong:rgba(255,255,255,.22);
+  --rbg-text:#ececee;
+  --rbg-text-muted:#b3b7c2;
+  --rbg-text-subtle:#8b95a6;
+  --rbg-text-faint:#5c626c;
+  --rbg-scrollbar:rgba(255,255,255,.16);
+  --rbg-toast-bg:#3a3c42;
+  --rbg-danger-bg:rgba(224,85,61,.15);
+}
 .rbg-root a{color:var(--accent,#3d5afe);text-decoration:none}
 .rbg-root a:hover{opacity:.82}
-.rbg-root ::selection{background:color-mix(in srgb,var(--accent,#3d5afe) 20%,#fff)}
-.rbg-root input{font-family:inherit}
+.rbg-root ::selection{background:color-mix(in srgb,var(--accent,#3d5afe) 20%,var(--rbg-surface,#fff))}
+.rbg-root input{font-family:inherit;color:inherit}
 .rbg-root input:focus{outline:none}
 .rbg-root button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
 @keyframes rbg-spin{to{transform:rotate(360deg)}}
 @keyframes rbg-pop{0%{transform:translateY(10px) scale(.98);opacity:0}100%{transform:none;opacity:1}}
 .rbg-root ::-webkit-scrollbar{width:11px;height:11px}
-.rbg-root ::-webkit-scrollbar-thumb{background:#e4e4e8;border-radius:10px;border:3px solid #fff}
-.rbg-root ::-webkit-scrollbar-thumb:hover{background:#d4d4d9}
+.rbg-root ::-webkit-scrollbar-thumb{background:var(--rbg-scrollbar);border-radius:10px;border:3px solid var(--rbg-bg)}
+.rbg-root ::-webkit-scrollbar-thumb:hover{background:var(--rbg-border-strong)}
 .rbg-quickscene:hover{border-color:var(--accent,#3d5afe);transform:translateY(-2px)}
-.rbg-recent-card:hover{border-color:#d7d7dd;transform:translateY(-2px)}
-.rbg-topbar-back:hover{background:#f4f4f5;color:#17171a}
-.rbg-reset-sel:hover{border-color:#d7d7dd;color:#17171a}
+.rbg-recent-card:hover{border-color:var(--rbg-border-strong);transform:translateY(-2px)}
+.rbg-topbar-back:hover{background:var(--rbg-surface-soft);color:var(--rbg-text)}
+.rbg-reset-sel:hover{border-color:var(--rbg-border-strong);color:var(--rbg-text)}
 .rbg-dl-btn:hover{filter:brightness(1.06)}
-.rbg-save-btn:hover{border-color:#c9c9d0}
+.rbg-save-btn:hover{border-color:var(--rbg-border-strong)}
 .rbg-gallery-new-btn:hover{filter:brightness(1.06)}
-.rbg-gallery-card:hover{box-shadow:0 10px 28px rgba(0,0,0,.08);border-color:#e2e2e6}
-.rbg-icon-btn:hover{background:#f4f4f5;color:#17171a}
-.rbg-icon-btn-danger:hover{background:#fdeceb;color:#e0553d}
+.rbg-gallery-card:hover{box-shadow:0 10px 28px rgba(0,0,0,.08);border-color:var(--rbg-border)}
+.rbg-icon-btn:hover{background:var(--rbg-surface-soft);color:var(--rbg-text)}
+.rbg-icon-btn-danger:hover{background:var(--rbg-danger-bg);color:var(--rbg-danger)}
+.rbg-brand:hover{opacity:.7}
+.rbg-navlink{font-size:15px;font-weight:600;color:var(--rbg-text-faint);letter-spacing:-.2px;padding:6px 0;background:none;line-height:1.2;transition:color .12s}
+.rbg-navlink:hover{color:var(--rbg-text)}
+.rbg-navlink-active{color:var(--rbg-text);font-weight:700}
+.rbg-navcount{margin-left:6px;font-size:12px;font-weight:600;color:inherit;opacity:.55;font-family:'Spline Sans Mono',monospace}
 `;
 
 export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
@@ -133,7 +174,6 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
     tolTouched: false,
     saved: [],
     filter: "all",
-    saveFolder: "제품",
     toast: "",
     engine: "idle",
     engineMsg: "",
@@ -193,14 +233,14 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
   private async seed() {
     try {
       const scenes = getQuickScenes();
-      const plan: [ReturnType<typeof getQuickScenes>[number], string, boolean][] = [
-        [scenes[0], "제품", true],
-        [scenes[4], "제품", false],
-        [scenes[1], "소품", false],
-        [scenes[3], "소품", true],
+      const plan: [ReturnType<typeof getQuickScenes>[number], boolean][] = [
+        [scenes[0], true],
+        [scenes[4], false],
+        [scenes[1], false],
+        [scenes[3], true],
       ];
       const items: SavedItem[] = [];
-      for (const [sc, folder, fav] of plan) {
+      for (const [sc, fav] of plan) {
         const img = await this.engine.loadImage(sc.photo);
         items.push({
           id: "seed_" + sc.id,
@@ -208,7 +248,7 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
           src: this.engine.autoRemove(img, 60),
           photo: sc.photo,
           fav,
-          folder,
+          folder: "",
           ts: Date.now(),
         });
       }
@@ -579,7 +619,6 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
     if (this.toastTimer) clearTimeout(this.toastTimer);
     this.toastTimer = setTimeout(() => this.setState({ toast: "" }), 2200);
   };
-  private onFolder = (e: React.ChangeEvent<HTMLSelectElement>) => this.setState({ saveFolder: e.target.value });
   private saveCurrent = async () => {
     if (!this.state.resultSrc) return;
     const sc = this.state.editorImage!;
@@ -589,7 +628,7 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
       src: this.state.resultSrc,
       photo: sc.photo,
       fav: false,
-      folder: this.state.saveFolder,
+      folder: "",
       ts: Date.now(),
     };
     const storage = this.props.storage;
@@ -725,9 +764,8 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
   };
   private filterSaved() {
     const { saved, filter } = this.state;
-    if (filter === "all") return saved;
     if (filter === "fav") return saved.filter((i) => i.fav);
-    return saved.filter((i) => i.folder === filter);
+    return saved;
   }
 
   render() {
@@ -735,9 +773,9 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
     return (
       <div className="rbg-root" style={{ ["--accent" as string]: accent } as CSSProperties}>
         <style>{GLOBAL_CSS}</style>
-        <div style={{ display: "flex", height: "100vh", width: "100%", overflow: "hidden", background: "#fff" }}>
-          {this.renderRail()}
-          <div style={{ flex: 1, minWidth: 0, height: "100%", position: "relative", display: "flex", flexDirection: "column", background: "#fff" }}>
+        <div style={{ display: "flex", flexDirection: "column", height: "100%", width: "100%", overflow: "hidden", background: "var(--rbg-surface,#fff)" }}>
+          {this.renderTopbar()}
+          <div style={{ flex: 1, minWidth: 0, minHeight: 0, position: "relative", display: "flex", flexDirection: "column", background: "var(--rbg-surface,#fff)" }}>
             {this.state.view === "home" && this.renderHome()}
             {this.state.view === "editor" && this.renderEditor()}
             {this.state.view === "gallery" && this.renderGallery()}
@@ -748,102 +786,46 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
     );
   }
 
-  private renderRail() {
+  private renderTopbar() {
     const s = this.state;
-    const railBase: CSSProperties = {
-      width: 52,
-      height: 52,
-      borderRadius: 13,
-      display: "flex",
-      flexDirection: "column",
-      alignItems: "center",
-      justifyContent: "center",
-      gap: 3,
-      transition: ".12s",
-    };
-    const railOn: CSSProperties = { ...railBase, background: "color-mix(in srgb, var(--accent) 12%, #fff)", color: "var(--accent)" };
-    const railOff: CSSProperties = { ...railBase, color: "#8a8a92" };
     return (
       <div
         style={{
-          width: 78,
+          height: 60,
           flex: "none",
-          height: "100%",
-          background: "#fafafa",
-          borderRight: "1px solid #ededed",
+          background: "var(--rbg-surface,#fff)",
+          borderBottom: "1px solid var(--rbg-border-soft,#f0f0f0)",
           display: "flex",
-          flexDirection: "column",
           alignItems: "center",
-          padding: "18px 0 16px",
-          gap: 6,
+          padding: "0 28px",
         }}
       >
-        <div
+        {/* 워드마크(타이틀) — 클릭하면 홈으로 */}
+        <button
+          className="rbg-brand"
           onClick={this.goHome}
           title={this.props.appName}
-          style={{
-            width: 42,
-            height: 42,
-            borderRadius: 13,
-            background: "var(--accent)",
-            color: "#fff",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            cursor: "pointer",
-            marginBottom: 14,
-            boxShadow: "0 4px 14px color-mix(in srgb, var(--accent) 40%, transparent)",
-          }}
+          style={{ fontSize: 19, fontWeight: 800, letterSpacing: "-.6px", color: "var(--rbg-text,#17171a)", marginRight: 46, padding: 0, background: "none", transition: "opacity .12s" }}
         >
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M8 4v11a2 2 0 0 0 2 2h11"></path>
-            <path d="M4 8h11a2 2 0 0 1 2 2v11"></path>
-          </svg>
-        </div>
-
-        <button onClick={this.goHome} style={s.view === "home" ? railOn : railOff}>
-          <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M12 4l0 9"></path>
-            <path d="M8.5 7.5 12 4l3.5 3.5"></path>
-            <path d="M4 19h16"></path>
-          </svg>
-          <span style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: "-.2px" }}>홈</span>
+          {this.props.appName}
         </button>
 
-        <button onClick={this.goGallery} style={s.view === "gallery" ? railOn : railOff}>
-          <span style={{ position: "relative", display: "flex" }}>
-            <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="4" y="4" width="7" height="7" rx="1.5"></rect>
-              <rect x="13" y="4" width="7" height="7" rx="1.5"></rect>
-              <rect x="4" y="13" width="7" height="7" rx="1.5"></rect>
-              <rect x="13" y="13" width="7" height="7" rx="1.5"></rect>
-            </svg>
-            {s.saved.length > 0 && (
-              <span
-                style={{
-                  position: "absolute",
-                  top: -6,
-                  right: -8,
-                  minWidth: 15,
-                  height: 15,
-                  padding: "0 3px",
-                  borderRadius: 8,
-                  background: "var(--accent)",
-                  color: "#fff",
-                  fontSize: 9,
-                  fontWeight: 700,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  fontFamily: "'Spline Sans Mono',monospace",
-                }}
-              >
-                {s.saved.length}
-              </span>
-            )}
-          </span>
-          <span style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: "-.2px" }}>보관함</span>
-        </button>
+        {/* 상단 텍스트 내비게이션 — 선택: 진하게(볼드) / 호버: 진하게 */}
+        <nav style={{ display: "flex", alignItems: "center", gap: 34 }}>
+          <button
+            className={s.view === "home" ? "rbg-navlink rbg-navlink-active" : "rbg-navlink"}
+            onClick={this.goHome}
+          >
+            홈
+          </button>
+          <button
+            className={s.view === "gallery" ? "rbg-navlink rbg-navlink-active" : "rbg-navlink"}
+            onClick={this.goGallery}
+          >
+            보관함
+            {s.saved.length > 0 && <span className="rbg-navcount">{s.saved.length}</span>}
+          </button>
+        </nav>
       </div>
     );
   }
@@ -855,17 +837,17 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
     const modelBadge = (MODEL_LABELS[this.props.model || "ormbg"] || "BiRefNet lite").toUpperCase();
     return (
       <div style={{ flex: 1, overflowY: "auto" }}>
-        <div style={{ maxWidth: 940, margin: "0 auto", padding: "64px 40px 80px" }}>
+        <div style={{ maxWidth: 940, margin: "0 auto", padding: "48px 40px 80px" }}>
           <div
             style={{
               display: "inline-flex",
               alignItems: "center",
               gap: 7,
               padding: "5px 11px",
-              border: "1px solid #ececec",
+              border: "1px solid var(--rbg-border,#ececec)",
               borderRadius: 999,
               fontSize: 11.5,
-              color: "#7a7a82",
+              color: "var(--rbg-text-subtle,#7a7a82)",
               marginBottom: 22,
               fontFamily: "'Spline Sans Mono',monospace",
             }}
@@ -878,105 +860,61 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
             <br />
             배경은 자동으로 지워집니다.
           </h1>
-          <p style={{ fontSize: 16, color: "#6b6b72", margin: "0 0 34px", maxWidth: 520, lineHeight: 1.55 }}>
-            사진을 첨부하거나 복사한 이미지를 붙여넣으세요. <b style={{ color: "#17171a", fontWeight: 600 }}>AI</b>가 피사체를 인식해{" "}
-            <b style={{ color: "#17171a", fontWeight: 600 }}>투명 PNG</b>로 오려 드립니다.
+          <p style={{ fontSize: 16, color: "var(--rbg-text-muted,#6b6b72)", margin: "0 0 34px", maxWidth: 520, lineHeight: 1.55 }}>
+            사진을 첨부하거나 복사한 이미지를 붙여넣으세요. <b style={{ color: "var(--rbg-text,#17171a)", fontWeight: 600 }}>AI</b>가 피사체를 인식해{" "}
+            <b style={{ color: "var(--rbg-text,#17171a)", fontWeight: 600 }}>투명 PNG</b>로 오려 드립니다.
           </p>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 16, marginBottom: 44 }}>
-            <label
-              htmlFor="rbg-file-input"
-              onDragOver={this.onDragOver}
-              onDragLeave={this.onDragLeave}
-              onDrop={this.onDrop}
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: 14,
-                padding: "44px 24px",
-                borderRadius: 18,
-                cursor: "pointer",
-                transition: ".15s",
-                border: s.dropActive ? "1.5px solid var(--accent)" : "1.5px dashed #d7d7dd",
-                background: s.dropActive ? "color-mix(in srgb, var(--accent) 7%, #fff)" : "#fcfcfd",
-              }}
-            >
-              <div
-                style={{
-                  width: 56,
-                  height: 56,
-                  borderRadius: 16,
-                  background: "var(--accent)",
-                  color: "#fff",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
-              >
-                <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 15V4"></path>
-                  <path d="m7.5 8.5 4.5-4.5 4.5 4.5"></path>
-                  <path d="M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"></path>
-                </svg>
-              </div>
-              <div style={{ textAlign: "center" }}>
-                <div style={{ fontSize: 15.5, fontWeight: 700, marginBottom: 4 }}>{s.dropActive ? "여기에 놓으세요" : "이미지 첨부하기"}</div>
-                <div style={{ fontSize: 12.5, color: "#9a9aa2", lineHeight: 1.5 }}>
-                  클릭해서 업로드 · 웹 이미지를 드래그하거나
-                  <br />
-                  복사한 이미지는 어디서나 <b style={{ color: "#6b6b72" }}>Ctrl/Cmd+V</b>로 붙여넣기
-                </div>
-              </div>
-              <input id="rbg-file-input" type="file" accept="image/*" onChange={this.onUpload} style={{ display: "none" }} />
-            </label>
-
+          <label
+            htmlFor="rbg-file-input"
+            onDragOver={this.onDragOver}
+            onDragLeave={this.onDragLeave}
+            onDrop={this.onDrop}
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 14,
+              padding: "48px 24px",
+              borderRadius: 18,
+              cursor: "pointer",
+              transition: ".15s",
+              marginBottom: 44,
+              border: s.dropActive ? "1.5px solid var(--accent)" : "1.5px dashed var(--rbg-border-strong,#d7d7dd)",
+              background: s.dropActive ? "color-mix(in srgb, var(--accent) 7%, var(--rbg-surface,#fff))" : "var(--rbg-panel,#fcfcfd)",
+            }}
+          >
             <div
               style={{
+                width: 56,
+                height: 56,
+                borderRadius: 16,
+                background: "var(--accent)",
+                color: "#fff",
                 display: "flex",
-                flexDirection: "column",
-                alignItems: "flex-start",
-                justifyContent: "space-between",
-                padding: 24,
-                border: "1px solid #ececec",
-                borderRadius: 18,
-                background: "#fff",
+                alignItems: "center",
+                justifyContent: "center",
               }}
             >
-              <div style={{ width: 44, height: 44, borderRadius: 13, background: "#f3f3f5", display: "flex", alignItems: "center", justifyContent: "center", color: "#17171a" }}>
-                <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="5" y="4" width="14" height="16" rx="2"></rect>
-                  <path d="M9 4v6l3-2 3 2V4"></path>
-                </svg>
-              </div>
-              <div>
-                <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>붙여넣기로 가져오기</div>
-                <div style={{ fontSize: 12.5, color: "#9a9aa2", lineHeight: 1.45 }}>
-                  웹에서 이미지를 복사한 뒤
-                  <br />
-                  <b style={{ color: "#6b6b72" }}>Ctrl/Cmd+V</b>로 바로 붙여넣기
-                </div>
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 15V4"></path>
+                <path d="m7.5 8.5 4.5-4.5 4.5 4.5"></path>
+                <path d="M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"></path>
+              </svg>
+            </div>
+            <div style={{ textAlign: "center" }}>
+              <div style={{ fontSize: 15.5, fontWeight: 700, marginBottom: 4 }}>{s.dropActive ? "여기에 놓으세요" : "이미지 첨부하기"}</div>
+              <div style={{ fontSize: 12.5, color: "var(--rbg-text-subtle,#9a9aa2)", lineHeight: 1.5 }}>
+                클릭해서 업로드 · 웹 이미지를 드래그하거나
+                <br />
+                복사한 이미지는 어디서나 <b style={{ color: "var(--rbg-text-muted,#6b6b72)" }}>Ctrl/Cmd+V</b>로 붙여넣기
               </div>
             </div>
-          </div>
+            <input id="rbg-file-input" type="file" accept="image/*" onChange={this.onUpload} style={{ display: "none" }} />
+          </label>
 
-          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 16 }}>
-            <h2 style={{ fontSize: 15, fontWeight: 700, margin: 0, letterSpacing: "-.3px" }}>빠른 시작 · 예시 이미지</h2>
-            <span style={{ fontSize: 12, color: "#a2a2aa" }}>클릭하면 편집기로 이동해요</span>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(6,1fr)", gap: 12 }}>
-            {scenes.map((sc) => (
-              <button
-                key={sc.id}
-                className="rbg-quickscene"
-                onClick={() => this.openEditor(sc)}
-                style={{ aspectRatio: "1", borderRadius: 14, border: "1px solid #ececec", overflow: "hidden", padding: 0, background: "#f7f7f8", transition: ".15s" }}
-              >
-                <img src={sc.photo} alt={sc.name} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
-              </button>
-            ))}
-          </div>
+
 
           {s.saved.length > 0 && (
             <div style={{ marginTop: 44 }}>
@@ -995,11 +933,11 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
                     style={{
                       aspectRatio: "1",
                       borderRadius: 14,
-                      border: "1px solid #ececec",
+                      border: "1px solid var(--rbg-border,#ececec)",
                       overflow: "hidden",
                       padding: 0,
-                      backgroundColor: "#fff",
-                      backgroundImage: "conic-gradient(#eef0f3 25%,transparent 0 50%,#eef0f3 0 75%,transparent 0)",
+                      backgroundColor: "var(--rbg-surface,#fff)",
+                      backgroundImage: "conic-gradient(var(--rbg-border,#eef0f3) 25%,transparent 0 50%,var(--rbg-border,#eef0f3) 0 75%,transparent 0)",
                       backgroundSize: "18px 18px",
                       transition: ".15s",
                     }}
@@ -1044,11 +982,11 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
       borderRadius: 12,
       marginBottom: 6,
       transition: ".12s",
-      border: "1px solid " + (on ? "color-mix(in srgb, var(--accent) 40%, #fff)" : "transparent"),
-      background: on ? "color-mix(in srgb, var(--accent) 7%, #fff)" : "transparent",
+      border: "1px solid " + (on ? "color-mix(in srgb, var(--accent) 40%, var(--rbg-surface,#fff))" : "transparent"),
+      background: on ? "color-mix(in srgb, var(--accent) 7%, var(--rbg-surface,#fff))" : "transparent",
     });
-    const icoBg = (on: boolean) => (on ? "var(--accent)" : "#f0f0f2");
-    const icoFg = (on: boolean) => (on ? "#fff" : "#9a9aa2");
+    const icoBg = (on: boolean) => (on ? "var(--accent)" : "var(--rbg-surface-soft,#f0f0f2)");
+    const icoFg = (on: boolean) => (on ? "#fff" : "var(--rbg-text-subtle,#9a9aa2)");
     const segStyle = (on: boolean): CSSProperties => ({
       flex: 1,
       height: 32,
@@ -1056,9 +994,9 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
       fontSize: 12,
       fontWeight: 600,
       transition: ".12s",
-      border: "1px solid " + (on ? "var(--accent)" : "#e6e6ea"),
-      background: on ? "var(--accent)" : "#f7f7f8",
-      color: on ? "#fff" : "#6b6b72",
+      border: "1px solid " + (on ? "var(--accent)" : "var(--rbg-border,#e6e6ea)"),
+      background: on ? "var(--accent)" : "var(--rbg-surface-soft,#f7f7f8)",
+      color: on ? "#fff" : "var(--rbg-text-muted,#6b6b72)",
     });
     const primaryStyle: CSSProperties = {
       display: "inline-flex",
@@ -1070,8 +1008,8 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
       fontSize: 14.5,
       fontWeight: 700,
       transition: ".12s",
-      background: primaryEnabled ? "var(--accent)" : "#ececed",
-      color: primaryEnabled ? "#fff" : "#b0b0b8",
+      background: primaryEnabled ? "var(--accent)" : "var(--rbg-border,#ececed)",
+      color: primaryEnabled ? "#fff" : "var(--rbg-text-faint,#b0b0b8)",
       cursor: primaryEnabled ? "pointer" : "not-allowed",
       boxShadow: primaryEnabled ? "0 6px 18px color-mix(in srgb, var(--accent) 34%, transparent)" : undefined,
     };
@@ -1086,8 +1024,8 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
       fontSize: 13,
       fontWeight: 700,
       transition: ".12s",
-      background: dlOn ? "var(--accent)" : "#f2f2f3",
-      color: dlOn ? "#fff" : "#c0c0c6",
+      background: dlOn ? "var(--accent)" : "var(--rbg-surface-soft,#f2f2f3)",
+      color: dlOn ? "#fff" : "var(--rbg-text-faint,#c0c0c6)",
       cursor: dlOn ? "pointer" : "not-allowed",
     };
     const saveBtnStyle: CSSProperties = {
@@ -1097,12 +1035,12 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
       fontSize: 13,
       fontWeight: 600,
       transition: ".12s",
-      border: "1px solid #e2e2e6",
-      color: dlOn ? "#17171a" : "#c0c0c6",
+      border: "1px solid var(--rbg-border,#e2e2e6)",
+      color: dlOn ? "var(--rbg-text,#17171a)" : "var(--rbg-text-faint,#c0c0c6)",
       cursor: dlOn ? "pointer" : "not-allowed",
     };
     const engineMap: Record<EngineStatus, [string, string]> = {
-      idle: ["준비 대기", "#c0c0c6"],
+      idle: ["준비 대기", "var(--rbg-text-faint,#c0c0c6)"],
       loading: [s.engineMsg || "불러오는 중", "#f59e0b"],
       ready: ["준비됨", "#16a34a"],
       error: ["오프라인 · 기본 엔진", "#e0553d"],
@@ -1122,23 +1060,23 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
 
     return (
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
-        <div style={{ height: 60, flex: "none", borderBottom: "1px solid #ededed", display: "flex", alignItems: "center", gap: 14, padding: "0 22px" }}>
+        <div style={{ height: 60, flex: "none", borderBottom: "1px solid var(--rbg-border-soft,#ededed)", display: "flex", alignItems: "center", gap: 14, padding: "0 22px" }}>
           <button
             className="rbg-topbar-back"
             onClick={this.goHome}
-            style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13.5, fontWeight: 600, color: "#6b6b72", padding: "7px 10px", borderRadius: 9 }}
+            style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13.5, fontWeight: 600, color: "var(--rbg-text-muted,#6b6b72)", padding: "7px 10px", borderRadius: 9 }}
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M15 18l-6-6 6-6"></path>
             </svg>
             새 이미지
           </button>
-          <div style={{ width: 1, height: 22, background: "#ededed" }}></div>
-          <div style={{ fontSize: 14, fontWeight: 600, color: "#17171a", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 260 }}>
+          <div style={{ width: 1, height: 22, background: "var(--rbg-border-soft,#ededed)" }}></div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: "var(--rbg-text,#17171a)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 260 }}>
             {s.editorImage ? s.editorImage.name : ""}
           </div>
           <div style={{ flex: 1 }}></div>
-          <span style={{ fontSize: 12, color: "#b0b0b8" }}>Ctrl/Cmd+V로 새 이미지 붙여넣기</span>
+          <span style={{ fontSize: 12, color: "var(--rbg-text-faint,#b0b0b8)" }}>Ctrl/Cmd+V로 새 이미지 붙여넣기</span>
           <button className="rbg-dl-btn" onClick={this.downloadCurrent} style={dlBtnStyle}>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M12 4v11"></path>
@@ -1153,8 +1091,8 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
         </div>
 
         <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
-          <div style={{ width: 222, flex: "none", borderRight: "1px solid #ededed", padding: "18px 16px", overflowY: "auto", background: "#fcfcfd", position: "relative" }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: "#a2a2aa", letterSpacing: ".4px", margin: "2px 4px 12px", fontFamily: "'Spline Sans Mono',monospace" }}>
+          <div style={{ width: 222, flex: "none", borderRight: "1px solid var(--rbg-border-soft,#ededed)", padding: "18px 16px", overflowY: "auto", background: "var(--rbg-panel,#fcfcfd)", position: "relative" }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "var(--rbg-text-subtle,#a2a2aa)", letterSpacing: ".4px", margin: "2px 4px 12px", fontFamily: "'Spline Sans Mono',monospace" }}>
               선택 도구
             </div>
 
@@ -1179,15 +1117,15 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
               </span>
               <span style={{ textAlign: "left" }}>
                 <span style={{ display: "block", fontSize: 13.5, fontWeight: 700 }}>AI 자동 제거</span>
-                <span style={{ display: "block", fontSize: 11.5, color: "#9a9aa2", marginTop: 1 }}>AI가 피사체를 인식</span>
+                <span style={{ display: "block", fontSize: 11.5, color: "var(--rbg-text-subtle,#9a9aa2)", marginTop: 1 }}>AI가 피사체를 인식</span>
               </span>
             </button>
 
             {tool === "auto" && (
-              <div style={{ display: "flex", alignItems: "center", gap: 7, margin: "0 2px 8px", padding: "7px 10px", borderRadius: 9, background: "#f5f5f7", fontSize: 11, color: "#7a7a82" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 7, margin: "0 2px 8px", padding: "7px 10px", borderRadius: 9, background: "var(--rbg-surface-soft,#f5f5f7)", fontSize: 11, color: "var(--rbg-text-subtle,#7a7a82)" }}>
                 <span style={{ width: 7, height: 7, borderRadius: "50%", background: eng[1], boxShadow: `0 0 0 3px color-mix(in srgb, ${eng[1]} 18%, transparent)` }}></span>
-                <span style={{ fontFamily: "'Spline Sans Mono',monospace", fontWeight: 600, color: "#4a4a52" }}>{modelLabel}</span>
-                <span style={{ color: "#c0c0c6" }}>·</span>
+                <span style={{ fontFamily: "'Spline Sans Mono',monospace", fontWeight: 600, color: "var(--rbg-text-muted,#4a4a52)" }}>{modelLabel}</span>
+                <span style={{ color: "var(--rbg-text-faint,#c0c0c6)" }}>·</span>
                 <span>{eng[0]}</span>
               </div>
             )}
@@ -1212,7 +1150,7 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
               </span>
               <span style={{ textAlign: "left" }}>
                 <span style={{ display: "block", fontSize: 13.5, fontWeight: 700 }}>클릭 지우개</span>
-                <span style={{ display: "block", fontSize: 11.5, color: "#9a9aa2", marginTop: 1 }}>배경을 콕 찍어 삭제</span>
+                <span style={{ display: "block", fontSize: 11.5, color: "var(--rbg-text-subtle,#9a9aa2)", marginTop: 1 }}>배경을 콕 찍어 삭제</span>
               </span>
             </button>
 
@@ -1236,7 +1174,7 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
               </span>
               <span style={{ textAlign: "left" }}>
                 <span style={{ display: "block", fontSize: 13.5, fontWeight: 700 }}>사각형 선택</span>
-                <span style={{ display: "block", fontSize: 11.5, color: "#9a9aa2", marginTop: 1 }}>영역을 드래그해 추출</span>
+                <span style={{ display: "block", fontSize: 11.5, color: "var(--rbg-text-subtle,#9a9aa2)", marginTop: 1 }}>영역을 드래그해 추출</span>
               </span>
             </button>
 
@@ -1263,7 +1201,7 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
               </span>
               <span style={{ textAlign: "left" }}>
                 <span style={{ display: "block", fontSize: 13.5, fontWeight: 700 }}>스마트 올가미</span>
-                <span style={{ display: "block", fontSize: 11.5, color: "#9a9aa2", marginTop: 1 }}>영역을 그리면 객체를 인식해요</span>
+                <span style={{ display: "block", fontSize: 11.5, color: "var(--rbg-text-subtle,#9a9aa2)", marginTop: 1 }}>영역을 그리면 객체를 인식해요</span>
               </span>
             </button>
 
@@ -1288,13 +1226,13 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
               </span>
               <span style={{ textAlign: "left" }}>
                 <span style={{ display: "block", fontSize: 13.5, fontWeight: 700 }}>브러시</span>
-                <span style={{ display: "block", fontSize: 11.5, color: "#9a9aa2", marginTop: 1 }}>칠해서 영역 추가·제거</span>
+                <span style={{ display: "block", fontSize: 11.5, color: "var(--rbg-text-subtle,#9a9aa2)", marginTop: 1 }}>칠해서 영역 추가·제거</span>
               </span>
             </button>
 
             {tool === "brush" && (
-              <div style={{ marginTop: 8, padding: 13, border: "1px solid #ececec", borderRadius: 12, background: "#fff" }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "#a2a2aa", marginBottom: 9, fontFamily: "'Spline Sans Mono',monospace" }}>브러시 설정</div>
+              <div style={{ marginTop: 8, padding: 13, border: "1px solid var(--rbg-border,#ececec)", borderRadius: 12, background: "var(--rbg-surface,#fff)" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--rbg-text-subtle,#a2a2aa)", marginBottom: 9, fontFamily: "'Spline Sans Mono',monospace" }}>브러시 설정</div>
                 <div style={{ display: "flex", gap: 5, marginBottom: 11 }}>
                   <button onClick={this.setBrushAdd} style={segStyle(s.brushOp === "add")}>
                     추가 +
@@ -1304,19 +1242,19 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
                   </button>
                 </div>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 9 }}>
-                  <span style={{ fontSize: 12, fontWeight: 600, color: "#4a4a52" }}>브러시 크기</span>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: "var(--rbg-text-muted,#4a4a52)" }}>브러시 크기</span>
                   <span style={{ fontSize: 11.5, fontWeight: 600, color: "var(--accent)", fontFamily: "'Spline Sans Mono',monospace" }}>{s.brushSize}px</span>
                 </div>
                 <input type="range" min={10} max={80} step={5} value={s.brushSize} onChange={this.onBrushSize} style={{ width: "100%", accentColor: "var(--accent)" }} />
-                <div style={{ fontSize: 11, color: "#a2a2aa", marginTop: 9, lineHeight: 1.5 }}>
+                <div style={{ fontSize: 11, color: "var(--rbg-text-subtle,#a2a2aa)", marginTop: 9, lineHeight: 1.5 }}>
                   {s.brushOp === "add" ? "칠한 영역의 객체를 복원해요. 크기를 조절해가며 칠해보세요." : "칠한 영역을 지워요. 크기를 조절해가며 칠해보세요."}
                 </div>
               </div>
             )}
 
             {tool === "lasso" && (
-              <div style={{ marginTop: 8, padding: 13, border: "1px solid #ececec", borderRadius: 12, background: "#fff" }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "#a2a2aa", marginBottom: 9, fontFamily: "'Spline Sans Mono',monospace" }}>올가미 다듬기</div>
+              <div style={{ marginTop: 8, padding: 13, border: "1px solid var(--rbg-border,#ececec)", borderRadius: 12, background: "var(--rbg-surface,#fff)" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--rbg-text-subtle,#a2a2aa)", marginBottom: 9, fontFamily: "'Spline Sans Mono',monospace" }}>올가미 다듬기</div>
                 <div style={{ display: "flex", gap: 5, marginBottom: 11 }}>
                   <button onClick={() => this.setOp("new")} style={segStyle(s.lassoOp === "new")}>
                     새 영역
@@ -1328,7 +1266,7 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
                     제외 −
                   </button>
                 </div>
-                <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 12.5, color: "#4a4a52", cursor: "pointer", userSelect: "none" }}>
+                <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 12.5, color: "var(--rbg-text-muted,#4a4a52)", cursor: "pointer", userSelect: "none" }}>
                   <span style={{ display: "flex", alignItems: "center", gap: 7 }}>
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M12 3l1.6 4.9L18.5 9.5 13.6 11 12 16l-1.6-5L5.5 9.5l4.9-1.6z"></path>
@@ -1337,7 +1275,7 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
                   </span>
                   <input type="checkbox" checked={s.magnetic} onChange={this.toggleMagnetic} style={{ accentColor: "var(--accent)", width: 15, height: 15 }} />
                 </label>
-                <div style={{ fontSize: 11, color: "#a2a2aa", marginTop: 9, lineHeight: 1.5 }}>
+                <div style={{ fontSize: 11, color: "var(--rbg-text-subtle,#a2a2aa)", marginTop: 9, lineHeight: 1.5 }}>
                   {s.magnetic
                     ? "여백을 두고 그리면 그 안에서 배경과 물체를 구분해 올가미를 자동으로 맞춰요. 물체 안쪽만 그리면 그린 그대로 추가·제외돼요."
                     : "그린 영역을 그대로 선택 영역으로 사용해요."}
@@ -1346,24 +1284,24 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
             )}
 
             {tool === "click" && (
-              <div style={{ marginTop: 12, padding: 14, border: "1px solid #ececec", borderRadius: 12, background: "#fff" }}>
+              <div style={{ marginTop: 12, padding: 14, border: "1px solid var(--rbg-border,#ececec)", borderRadius: 12, background: "var(--rbg-surface,#fff)" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 9 }}>
-                  <span style={{ fontSize: 12, fontWeight: 600, color: "#4a4a52" }}>인식 강도</span>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: "var(--rbg-text-muted,#4a4a52)" }}>인식 강도</span>
                   <span style={{ fontSize: 11.5, fontWeight: 600, color: "var(--accent)", fontFamily: "'Spline Sans Mono',monospace" }}>{this.effTol()}</span>
                 </div>
                 <input type="range" min={20} max={130} step={5} value={this.effTol()} onChange={this.onTol} onInput={this.onTol} style={{ width: "100%", accentColor: "var(--accent)" }} />
-                <div style={{ fontSize: 11, color: "#a2a2aa", marginTop: 7, lineHeight: 1.4 }}>배경과 인접한 색을 얼마나 넓게 지울지 정해요.</div>
+                <div style={{ fontSize: 11, color: "var(--rbg-text-subtle,#a2a2aa)", marginTop: 7, lineHeight: 1.4 }}>배경과 인접한 색을 얼마나 넓게 지울지 정해요.</div>
               </div>
             )}
 
             {hasSelection && (
-              <button className="rbg-reset-sel" onClick={this.resetSel} style={{ marginTop: 12, width: "100%", padding: 9, borderRadius: 10, border: "1px solid #ececec", fontSize: 12.5, fontWeight: 600, color: "#6b6b72" }}>
+              <button className="rbg-reset-sel" onClick={this.resetSel} style={{ marginTop: 12, width: "100%", padding: 9, borderRadius: 10, border: "1px solid var(--rbg-border,#ececec)", fontSize: 12.5, fontWeight: 600, color: "var(--rbg-text-muted,#6b6b72)" }}>
                 선택 초기화
               </button>
             )}
           </div>
 
-          <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", background: "#f6f6f7" }}>
+          <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", background: "var(--rbg-canvas,#f6f6f7)" }}>
             <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: 32, minHeight: 0, position: "relative" }}>
               <div
                 style={{
@@ -1374,8 +1312,8 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
                   borderRadius: 12,
                   overflow: "hidden",
                   boxShadow: "0 12px 40px rgba(0,0,0,.10)",
-                  backgroundColor: "#fff",
-                  backgroundImage: "conic-gradient(#eaecf0 25%,transparent 0 50%,#eaecf0 0 75%,transparent 0)",
+                  backgroundColor: "var(--rbg-surface,#fff)",
+                  backgroundImage: "conic-gradient(var(--rbg-border,#eaecf0) 25%,transparent 0 50%,var(--rbg-border,#eaecf0) 0 75%,transparent 0)",
                   backgroundSize: "22px 22px",
                 }}
               >
@@ -1471,9 +1409,9 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
                       textAlign: "center",
                     }}
                   >
-                    <div style={{ width: 38, height: 38, border: "3px solid #e4e4e8", borderTopColor: "var(--accent)", borderRadius: "50%", animation: "rbg-spin .7s linear infinite" }}></div>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: "#4a4a52" }}>{processMsg}</div>
-                    {processSub && <div style={{ fontSize: 11, color: "#9a9aa2", maxWidth: 240, lineHeight: 1.4 }}>{processSub}</div>}
+                    <div style={{ width: 38, height: 38, border: "3px solid var(--rbg-border,#e4e4e8)", borderTopColor: "var(--accent)", borderRadius: "50%", animation: "rbg-spin .7s linear infinite" }}></div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "var(--rbg-text-muted,#4a4a52)" }}>{processMsg}</div>
+                    {processSub && <div style={{ fontSize: 11, color: "var(--rbg-text-subtle,#9a9aa2)", maxWidth: 240, lineHeight: 1.4 }}>{processSub}</div>}
                   </div>
                 )}
               </div>
@@ -1505,7 +1443,7 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
               )}
             </div>
 
-            <div style={{ flex: "none", borderTop: "1px solid #e6e6ea", background: "#fff", padding: "16px 24px", display: "flex", alignItems: "center", gap: 14, minHeight: 74 }}>
+            <div style={{ flex: "none", borderTop: "1px solid var(--rbg-border,#e6e6ea)", background: "var(--rbg-surface,#fff)", padding: "16px 24px", display: "flex", alignItems: "center", gap: 14, minHeight: 74 }}>
               {showPrimary && (
                 <>
                   <button onClick={this.runRemoval} disabled={!primaryEnabled} style={primaryStyle}>
@@ -1514,7 +1452,7 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
                     </svg>
                     {primaryLabel}
                   </button>
-                  <span style={{ fontSize: 12.5, color: "#9a9aa2" }}>{primaryHint}</span>
+                  <span style={{ fontSize: 12.5, color: "var(--rbg-text-subtle,#9a9aa2)" }}>{primaryHint}</span>
                 </>
               )}
 
@@ -1535,7 +1473,7 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
                   <button
                     className="rbg-save-btn"
                     onClick={this.saveCurrent}
-                    style={{ display: "inline-flex", alignItems: "center", gap: 7, height: 44, padding: "0 18px", borderRadius: 11, border: "1px solid #e2e2e6", fontSize: 14, fontWeight: 600, color: "#17171a" }}
+                    style={{ display: "inline-flex", alignItems: "center", gap: 7, height: 44, padding: "0 18px", borderRadius: 11, border: "1px solid var(--rbg-border,#e2e2e6)", fontSize: 14, fontWeight: 600, color: "var(--rbg-text,#17171a)" }}
                   >
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
                       <rect x="5" y="4" width="14" height="16" rx="2"></rect>
@@ -1543,19 +1481,11 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
                     </svg>
                     보관함에 저장
                   </button>
-                  <div style={{ width: 1, height: 26, background: "#ededed" }}></div>
-                  <label style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13, color: "#6b6b72", cursor: "pointer", userSelect: "none" }}>
+                  <div style={{ width: 1, height: 26, background: "var(--rbg-border-soft,#ededed)" }}></div>
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13, color: "var(--rbg-text-muted,#6b6b72)", cursor: "pointer", userSelect: "none" }}>
                     <input type="checkbox" checked={s.compareOn} onChange={this.toggleCompare} style={{ accentColor: "var(--accent)", width: 15, height: 15 }} />
                     원본과 비교
                   </label>
-                  <div style={{ flex: 1 }}></div>
-                  <select value={s.saveFolder} onChange={this.onFolder} style={{ height: 38, padding: "0 12px", border: "1px solid #e2e2e6", borderRadius: 10, fontSize: 13, color: "#4a4a52", background: "#fff", cursor: "pointer" }}>
-                    {FOLDERS.map((f) => (
-                      <option key={f} value={f}>
-                        폴더 · {f}
-                      </option>
-                    ))}
-                  </select>
                 </>
               )}
             </div>
@@ -1571,13 +1501,11 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
     const tabDefs = [
       { k: "all", label: "전체", count: s.saved.length },
       { k: "fav", label: "즐겨찾기", count: s.saved.filter((i) => i.fav).length },
-      ...FOLDERS.map((f) => ({ k: f, label: f, count: s.saved.filter((i) => i.folder === f).length })),
     ];
     return (
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
-        <div style={{ height: 60, flex: "none", borderBottom: "1px solid #ededed", display: "flex", alignItems: "center", gap: 12, padding: "0 24px" }}>
-          <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: "-.4px" }}>보관함</div>
-          <span style={{ fontSize: 12, color: "#a2a2aa", fontFamily: "'Spline Sans Mono',monospace" }}>{s.saved.length} ITEMS</span>
+        <div style={{ height: 60, flex: "none", borderBottom: "1px solid var(--rbg-border-soft,#ededed)", display: "flex", alignItems: "center", gap: 12, padding: "0 24px" }}>
+          <span style={{ fontSize: 12, color: "var(--rbg-text-subtle,#a2a2aa)", fontFamily: "'Spline Sans Mono',monospace" }}>{s.saved.length} ITEMS</span>
           <div style={{ flex: 1 }}></div>
           <button
             className="rbg-gallery-new-btn"
@@ -1591,7 +1519,7 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
           </button>
         </div>
 
-        <div style={{ padding: "18px 24px 10px", flex: "none", display: "flex", gap: 8, flexWrap: "wrap", borderBottom: "1px solid #f2f2f2" }}>
+        <div style={{ padding: "18px 24px 10px", flex: "none", display: "flex", gap: 8, flexWrap: "wrap", borderBottom: "1px solid var(--rbg-surface-soft,#f2f2f2)" }}>
           {tabDefs.map((t) => (
             <button
               key={t.k}
@@ -1603,8 +1531,8 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
                 fontSize: 13,
                 fontWeight: 600,
                 transition: ".12s",
-                background: s.filter === t.k ? "#17171a" : "#f4f4f5",
-                color: s.filter === t.k ? "#fff" : "#6b6b72",
+                background: s.filter === t.k ? "var(--rbg-text,#17171a)" : "var(--rbg-surface-soft,#f4f4f5)",
+                color: s.filter === t.k ? "#fff" : "var(--rbg-text-muted,#6b6b72)",
               }}
             >
               {t.label}
@@ -1615,8 +1543,8 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
 
         <div style={{ flex: 1, overflowY: "auto", padding: "22px 24px 40px" }}>
           {filtered.length === 0 && (
-            <div style={{ height: "100%", minHeight: 340, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16, color: "#b0b0b8" }}>
-              <div style={{ width: 64, height: 64, borderRadius: 18, background: "#f4f4f5", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <div style={{ height: "100%", minHeight: 340, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16, color: "var(--rbg-text-faint,#b0b0b8)" }}>
+              <div style={{ width: 64, height: 64, borderRadius: 18, background: "var(--rbg-surface-soft,#f4f4f5)", display: "flex", alignItems: "center", justifyContent: "center" }}>
                 <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
                   <rect x="4" y="4" width="7" height="7" rx="1.5"></rect>
                   <rect x="13" y="4" width="7" height="7" rx="1.5"></rect>
@@ -1624,7 +1552,7 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
                   <rect x="13" y="13" width="7" height="7" rx="1.5"></rect>
                 </svg>
               </div>
-              <div style={{ fontSize: 14, fontWeight: 600, color: "#8a8a92" }}>아직 저장된 항목이 없어요</div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: "var(--rbg-text-subtle,#8a8a92)" }}>아직 저장된 항목이 없어요</div>
               <button onClick={this.goHome} style={{ fontSize: 13, fontWeight: 600, color: "var(--accent)" }}>
                 이미지 오리러 가기 →
               </button>
@@ -1634,13 +1562,13 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
           {filtered.length > 0 && (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(190px,1fr))", gap: 16 }}>
               {filtered.map((it) => (
-                <div key={it.id} className="rbg-gallery-card" style={{ border: "1px solid #ececec", borderRadius: 16, overflow: "hidden", background: "#fff", animation: "rbg-pop .3s ease both", transition: ".15s" }}>
+                <div key={it.id} className="rbg-gallery-card" style={{ border: "1px solid var(--rbg-border,#ececec)", borderRadius: 16, overflow: "hidden", background: "var(--rbg-surface,#fff)", animation: "rbg-pop .3s ease both", transition: ".15s" }}>
                   <div
                     style={{
                       position: "relative",
                       aspectRatio: "1",
-                      backgroundColor: "#fff",
-                      backgroundImage: "conic-gradient(#eef0f3 25%,transparent 0 50%,#eef0f3 0 75%,transparent 0)",
+                      backgroundColor: "var(--rbg-surface,#fff)",
+                      backgroundImage: "conic-gradient(var(--rbg-border,#eef0f3) 25%,transparent 0 50%,var(--rbg-border,#eef0f3) 0 75%,transparent 0)",
                       backgroundSize: "18px 18px",
                     }}
                   >
@@ -1662,7 +1590,7 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
                         alignItems: "center",
                         justifyContent: "center",
                         boxShadow: "0 1px 4px rgba(0,0,0,.1)",
-                        color: it.fav ? "var(--accent)" : "#b0b0b8",
+                        color: it.fav ? "var(--accent)" : "var(--rbg-text-faint,#b0b0b8)",
                       }}
                     >
                       <svg width="16" height="16" viewBox="0 0 24 24" fill={it.fav ? "var(--accent)" : "none"} stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
@@ -1672,14 +1600,13 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
                   </div>
                   <div style={{ padding: "11px 12px 12px" }}>
                     <div style={{ fontSize: 13.5, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{it.name}</div>
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 8 }}>
-                      <span style={{ fontSize: 11, color: "#9a9aa2", background: "#f4f4f5", padding: "3px 8px", borderRadius: 6 }}>{it.folder}</span>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", marginTop: 8 }}>
                       <div style={{ display: "flex", gap: 2 }}>
                         <button
                           className="rbg-icon-btn"
                           onClick={() => this.reeditItem(it)}
                           title="재편집"
-                          style={{ width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", color: "#8a8a92" }}
+                          style={{ width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--rbg-text-subtle,#8a8a92)" }}
                         >
                           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                             <path d="M16.5 4.5l3 3L8 19l-4 1 1-4z"></path>
@@ -1689,7 +1616,7 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
                           className="rbg-icon-btn"
                           onClick={() => this.download(it)}
                           title="다운로드"
-                          style={{ width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", color: "#8a8a92" }}
+                          style={{ width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--rbg-text-subtle,#8a8a92)" }}
                         >
                           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
                             <path d="M12 4v11"></path>
@@ -1701,7 +1628,7 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
                           className="rbg-icon-btn-danger"
                           onClick={() => this.deleteItem(it.id)}
                           title="삭제"
-                          style={{ width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", color: "#8a8a92" }}
+                          style={{ width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--rbg-text-subtle,#8a8a92)" }}
                         >
                           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                             <path d="M5 7h14M9 7V5h6v2M7 7l1 12h8l1-12"></path>
@@ -1728,7 +1655,7 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
           left: "50%",
           transform: "translateX(-50%)",
           zIndex: 60,
-          background: "#17171a",
+          background: "var(--rbg-toast-bg,#17171a)",
           color: "#fff",
           fontSize: 13.5,
           fontWeight: 600,
