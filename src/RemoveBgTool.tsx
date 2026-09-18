@@ -7,9 +7,7 @@ import type {
   SavedItem,
   Tool,
   View,
-  LassoOp,
   BrushOp,
-  RectSel,
 } from "./types";
 
 type Pt = [number, number];
@@ -20,22 +18,17 @@ interface State {
   tool: Tool;
   processed: boolean;
   processing: boolean;
+  manualReady: boolean;
+  manualError: string;
+  notice: string;
   resultSrc: string | null;
-  sel: RectSel | null;
-  lassoPts: Pt[];
-  wandPt: Pt | null;
   dragging: boolean;
   compareOn: boolean;
-  tol: number;
-  tolTouched: boolean;
   saved: SavedItem[];
   filter: string;
   toast: string;
   engine: EngineStatus;
   engineMsg: string;
-  lassoOp: LassoOp;
-  magnetic: boolean;
-  hasLassoSel: boolean;
   brushPts: Pt[];
   brushSize: number;
   brushOp: BrushOp;
@@ -45,97 +38,107 @@ interface State {
 
 
 const GLOBAL_CSS = `
-.rbg-root *{box-sizing:border-box}
-.rbg-root{
-  height:100%;font-family:'Pretendard',system-ui,-apple-system,sans-serif;
-  --rbg-page:#fff;
-  --rbg-bg:#fff;
-  --rbg-surface:#fff;
-  --rbg-surface-soft:#f7f7f8;
-  --rbg-panel:#fcfcfd;
-  --rbg-canvas:#f5f5f7;
-  --rbg-border:#ececec;
-  --rbg-border-soft:#ededed;
-  --rbg-border-strong:#d7d7dd;
-  --rbg-text:#17171a;
-  --rbg-text-muted:#6b6b72;
-  --rbg-text-subtle:#9a9aa2;
-  --rbg-text-faint:#c0c0c6;
-  --rbg-scrollbar:#e4e4e8;
-  --rbg-toast-bg:#17171a;
-  --rbg-danger:#e0553d;
-  --rbg-danger-bg:#fdeceb;
-  color:var(--rbg-text);background:var(--rbg-bg);
+.pdf-editor-root *{box-sizing:border-box}
+.pdf-editor-root{
+  height:100%;
+  font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  font-size:14px;line-height:1.5;color-scheme:light;
+  --accent:#000;
+  --pdfe-page:#fff;
+  --pdfe-bg:#fff;
+  --pdfe-surface:#fff;
+  --pdfe-surface-soft:#f9fafb;
+  --pdfe-selected:#f3f4f6;
+  --pdfe-canvas:#f9fafb;
+  --pdfe-border:#e5e7eb;
+  --pdfe-border-soft:rgba(229,231,235,.6);
+  --pdfe-border-strong:#e5e7eb;
+  --pdfe-text:#111827;
+  --pdfe-text-muted:#6b7280;
+  --pdfe-text-subtle:#9ca3af;
+  --pdfe-text-faint:#9ca3af;
+  --pdfe-scrollbar:#e5e7eb;
+  --pdfe-toast-bg:#111827;
+  --pdfe-danger:#dc2626;
+  --pdfe-danger-bg:#fef2f2;
+  /* Keep the component's local names as aliases for its inline styles. */
+  --rbg-page:var(--pdfe-page);
+  --rbg-bg:var(--pdfe-bg);
+  --rbg-surface:var(--pdfe-surface);
+  --rbg-surface-soft:var(--pdfe-surface-soft);
+  --rbg-panel:var(--pdfe-surface-soft);
+  --rbg-canvas:var(--pdfe-canvas);
+  --rbg-border:var(--pdfe-border);
+  --rbg-border-soft:var(--pdfe-border-soft);
+  --rbg-border-strong:var(--pdfe-border-strong);
+  --rbg-text:var(--pdfe-text);
+  --rbg-text-muted:var(--pdfe-text-muted);
+  --rbg-text-subtle:var(--pdfe-text-subtle);
+  --rbg-text-faint:var(--pdfe-text-faint);
+  --rbg-scrollbar:var(--pdfe-scrollbar);
+  --rbg-toast-bg:var(--pdfe-toast-bg);
+  --rbg-danger:var(--pdfe-danger);
+  --rbg-danger-bg:var(--pdfe-danger-bg);
+  color:var(--pdfe-text);background:var(--pdfe-bg);
   -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility
 }
-html[data-theme="dark"] .rbg-root{
-  --rbg-bg:#1c1d1f;
-  --rbg-surface:#1c1d1f;
-  --rbg-surface-soft:rgba(255,255,255,.05);
-  --rbg-panel:#131314;
-  --rbg-canvas:#131314;
-  --rbg-border:rgba(255,255,255,.12);
-  --rbg-border-soft:rgba(255,255,255,.09);
-  --rbg-border-strong:rgba(255,255,255,.22);
-  --rbg-text:#ececee;
-  --rbg-text-muted:#b3b7c2;
-  --rbg-text-subtle:#8b95a6;
-  --rbg-text-faint:#5c626c;
-  --rbg-scrollbar:rgba(255,255,255,.16);
-  --rbg-toast-bg:#3a3c42;
-  --rbg-danger-bg:rgba(224,85,61,.15);
-}
-.rbg-root a{color:var(--accent,#3d5afe);text-decoration:none}
-.rbg-root a:hover{opacity:.82}
-.rbg-root ::selection{background:color-mix(in srgb,var(--accent,#3d5afe) 20%,var(--rbg-surface,#fff))}
-.rbg-root input{font-family:inherit;color:inherit}
-.rbg-root input:focus{outline:none}
-.rbg-root button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
+.pdf-editor-root a{color:var(--accent,#000);text-decoration:none}
+.pdf-editor-root a:hover{opacity:.82}
+.pdf-editor-root ::selection{background:color-mix(in srgb,var(--accent,#000) 12%,var(--pdfe-surface,#fff))}
+.pdf-editor-root input{font-family:inherit;color:inherit}
+.pdf-editor-root input:focus{outline:none}
+.pdf-editor-root button{font-family:inherit;cursor:pointer;border:none;border-radius:9999px !important;background:none;color:inherit;transition:background-color .18s ease,color .18s ease,border-color .18s ease,outline-color .18s ease}
+.pdf-editor-root button:disabled{opacity:.5;cursor:not-allowed}
+.pdf-editor-root button:focus-visible,.pdf-editor-root input:focus-visible{outline:2px solid var(--pdfe-text);outline-offset:2px}
 @keyframes rbg-spin{to{transform:rotate(360deg)}}
 @keyframes rbg-pop{0%{transform:translateY(10px) scale(.98);opacity:0}100%{transform:none;opacity:1}}
-.rbg-root ::-webkit-scrollbar{width:11px;height:11px}
-.rbg-root ::-webkit-scrollbar-thumb{background:var(--rbg-scrollbar);border-radius:10px;border:3px solid var(--rbg-bg)}
-.rbg-root ::-webkit-scrollbar-thumb:hover{background:var(--rbg-border-strong)}
-.rbg-quickscene:hover{border-color:var(--accent,#3d5afe);transform:translateY(-2px)}
-.rbg-recent-card:hover{border-color:var(--rbg-border-strong);transform:translateY(-2px)}
-.rbg-topbar-back:hover{background:var(--rbg-surface-soft);color:var(--rbg-text)}
-.rbg-reset-sel:hover{border-color:var(--rbg-border-strong);color:var(--rbg-text)}
-.rbg-dl-btn:hover{filter:brightness(1.06)}
-.rbg-save-btn:hover{border-color:var(--rbg-border-strong)}
-.rbg-gallery-new-btn:hover{filter:brightness(1.06)}
-.rbg-gallery-card:hover{box-shadow:0 10px 28px rgba(0,0,0,.08);border-color:var(--rbg-border)}
-.rbg-icon-btn:hover{background:var(--rbg-surface-soft);color:var(--rbg-text)}
-.rbg-icon-btn-danger:hover{background:var(--rbg-danger-bg);color:var(--rbg-danger)}
-.rbg-brand:hover{opacity:.7}
-.rbg-navlink{font-size:15px;font-weight:600;color:var(--rbg-text-faint);letter-spacing:-.2px;padding:6px 0;background:none;line-height:1.2;transition:color .12s}
-.rbg-navlink:hover{color:var(--rbg-text)}
-.rbg-navlink-active{color:var(--rbg-text);font-weight:700}
-.rbg-navcount{margin-left:6px;font-size:12px;font-weight:600;color:inherit;opacity:.55;font-family:'Spline Sans Mono',monospace}
+.pdf-editor-root ::-webkit-scrollbar{width:11px;height:11px}
+.pdf-editor-root ::-webkit-scrollbar-thumb{background:var(--pdfe-scrollbar);border-radius:10px;border:3px solid var(--pdfe-bg)}
+.pdf-editor-root ::-webkit-scrollbar-thumb:hover{background:var(--pdfe-border-strong)}
+.pdf-editor-root .rbg-quickscene:hover{border-color:var(--accent,#000);transform:translateY(-2px)}
+.pdf-editor-root .rbg-recent-card:hover{border-color:var(--pdfe-border-strong);transform:translateY(-2px)}
+.pdf-editor-root .rbg-topbar-back:not(:disabled):hover{--pdfe-button-bg:var(--pdfe-selected);--pdfe-button-color:var(--pdfe-text);background:var(--pdfe-button-bg);color:var(--pdfe-button-color)}
+.pdf-editor-root .rbg-reset-sel:not(:disabled):hover{--pdfe-button-border:var(--pdfe-border-strong);--pdfe-button-color:var(--pdfe-text);border-color:var(--pdfe-button-border);color:var(--pdfe-button-color)}
+.pdf-editor-root .rbg-dl-btn:not(:disabled):hover,.pdf-editor-root .rbg-gallery-new-btn:not(:disabled):hover,.pdf-editor-root .rbg-primary-btn:not(:disabled):hover{--pdfe-button-bg:#27272a;--pdfe-button-color:#fff;background:var(--pdfe-button-bg);color:var(--pdfe-button-color);filter:none}
+.pdf-editor-root .rbg-save-btn:not(:disabled):hover{--pdfe-button-border:var(--pdfe-border-strong);border-color:var(--pdfe-button-border)}
+.pdf-editor-root .rbg-gallery-card:hover{box-shadow:0 10px 28px rgba(0,0,0,.08);border-color:var(--pdfe-border)}
+.pdf-editor-root .rbg-icon-btn:not(:disabled):hover{--pdfe-button-bg:var(--pdfe-surface-soft);--pdfe-button-color:var(--pdfe-text);background:var(--pdfe-button-bg);color:var(--pdfe-button-color)}
+.pdf-editor-root .rbg-icon-btn-danger:not(:disabled):hover{--pdfe-button-bg:var(--pdfe-danger-bg);--pdfe-button-color:var(--pdfe-danger);background:var(--pdfe-button-bg);color:var(--pdfe-button-color)}
+.pdf-editor-root .rbg-brand:hover{opacity:.7}
+.pdf-editor-root .rbg-navlink{font-size:15px;font-weight:600;color:var(--pdfe-text-faint);letter-spacing:-.2px;padding:6px 0;background:none;line-height:1.2;transition:color .18s ease}
+.pdf-editor-root .rbg-navlink:hover{color:var(--pdfe-text)}
+.pdf-editor-root .rbg-navlink-active{color:var(--pdfe-text);font-weight:700}
+.pdf-editor-root .rbg-navcount{margin-left:6px;font-size:12px;font-weight:600;color:inherit;opacity:.55;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+@media (prefers-reduced-motion:reduce){
+  .pdf-editor-root *,.pdf-editor-root *::before,.pdf-editor-root *::after{
+    animation-duration:.01ms!important;animation-iteration-count:1!important;
+    transition-duration:.01ms!important;scroll-behavior:auto!important
+  }
+}
 `;
 
 export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
   static defaultProps: Partial<RemoveBgToolProps> = {
-    accent: "#3d5afe",
+    accent: "#000",
     appName: "누끼컷",
-    autoTol: 30,
     model: "ormbg",
   };
 
   private engine = new RemoveBgEngine();
+  private engineDisposed = false;
   private toastTimer: ReturnType<typeof setTimeout> | null = null;
-  private strokeMask: HTMLCanvasElement | null = null;
-  private strokeZone: HTMLCanvasElement | null = null;
-  private strokeOp: LassoOp = "new";
-  private dragStart: { fx: number; fy: number } | null = null;
+  private request: symbol | null = null;
+  private generation = 0;
+  private mounted = false;
+  private activePointer: number | null = null;
   // live selection overlay: the engine paints the current selection into this
-  // canvas cheaply on every pointer move (no toDataURL), so brushing/lassoing
+  // canvas cheaply on every pointer move (no toDataURL), so brushing
   // stays smooth instead of re-encoding a PNG per move.
   private overlayRef = React.createRef<HTMLCanvasElement>();
   // Pointer strokes can fire far faster than the screen refreshes. Points are
   // accumulated in these buffers (never lost), while React re-renders — the
   // expensive part, since render() rebuilds the whole editor tree — are
   // coalesced to at most one per animation frame via scheduleState().
-  private lassoBuf: Pt[] = [];
   private brushBuf: Pt[] = [];
   private rafId: number | null = null;
   private pendingState: Partial<State> | null = null;
@@ -164,22 +167,17 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
     tool: "auto",
     processed: false,
     processing: false,
+    manualReady: false,
+    manualError: "",
+    notice: "",
     resultSrc: null,
-    sel: null,
-    lassoPts: [],
-    wandPt: null,
     dragging: false,
     compareOn: false,
-    tol: 60,
-    tolTouched: false,
     saved: [],
     filter: "all",
     toast: "",
     engine: "idle",
     engineMsg: "",
-    lassoOp: "new",
-    magnetic: true,
-    hasLassoSel: false,
     brushPts: [],
     brushSize: 30,
     brushOp: "add",
@@ -188,6 +186,11 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
   };
 
   componentDidMount() {
+    if (this.engineDisposed) {
+      this.engine = new RemoveBgEngine();
+      this.engineDisposed = false;
+    }
+    this.mounted = true;
     document.addEventListener("paste", this.onPaste);
     if (this.props.storage) {
       void this.loadFromStorage();
@@ -197,26 +200,33 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
   }
 
   componentWillUnmount() {
+    this.mounted = false;
+    this.invalidate();
+    void this.engine.dispose().catch((error) => console.error("[AI bg-remove] dispose:", error));
+    this.engineDisposed = true;
     document.removeEventListener("paste", this.onPaste);
-    if (this.toastTimer) clearTimeout(this.toastTimer);
-    this.cancelScheduled();
   }
 
   componentDidUpdate(prevProps: RemoveBgToolProps) {
     if (prevProps.model !== this.props.model) {
-      this.setState({ engine: "idle", engineMsg: "" });
+      this.invalidate();
+      this.setState({ engine: "idle", engineMsg: "" }, () => {
+        if (this.state.view === "editor" && this.state.tool === "brush") {
+          void this.prepareManual();
+        }
+      });
     }
     // keep the live selection overlay in sync with the engine's _selCanvas.
     // Cheap (two drawImage calls), so running it after every render is fine and
     // covers mount, stroke commits, and tool switches without extra plumbing.
-    if ((this.state.tool === "lasso" || this.state.tool === "brush") && !this.state.processing) {
+    if (this.state.manualReady && !this.state.processing) {
       this.paintOverlay();
     }
   }
 
   private paintOverlay = () => {
     const dom = this.overlayRef.current;
-    if (dom) this.engine.renderSelOverlay(dom, this.props.accent || "#3d5afe");
+    if (dom) this.engine.renderSelOverlay(dom, this.props.accent || "#000");
   };
 
   private async loadFromStorage() {
@@ -224,6 +234,7 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
     if (!storage) return;
     try {
       const items = await storage.load();
+      if (!this.mounted) return;
       this.setState({ saved: Array.isArray(items) ? items : [] });
     } catch {
       this.flash("보관함을 불러오지 못했어요");
@@ -242,6 +253,7 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
       const items: SavedItem[] = [];
       for (const [sc, fav] of plan) {
         const img = await this.engine.loadImage(sc.photo);
+        if (!this.mounted) return;
         items.push({
           id: "seed_" + sc.id,
           name: sc.name,
@@ -262,13 +274,20 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
   // any image bytes we already have (a real uploaded File, or a Blob copied
   // from the OS clipboard) go straight to the editor — no network involved.
   private blobToEditor = (blob: Blob, name?: string) => {
+    this.invalidate();
+    const generation = this.generation;
     const rd = new FileReader();
-    rd.onload = () =>
+    rd.onload = () => {
+      if (!this.mounted || this.generation !== generation) return;
       this.openEditor({
         id: "img_" + Date.now(),
         name: (name || "이미지").replace(/\.[^.]+$/, ""),
         photo: rd.result as string,
       });
+    };
+    rd.onerror = () => {
+      if (this.mounted && this.generation === generation) this.flash("이미지를 읽지 못했어요. 다시 업로드해 주세요.");
+    };
     rd.readAsDataURL(blob);
   };
 
@@ -287,14 +306,19 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
   // have to fetch it ourselves, which only succeeds if that host allows
   // cross-origin reads. When it doesn't, guide the user to copy/paste instead.
   private loadUrlToEditor = async (url: string) => {
+    this.invalidate();
+    const generation = this.generation;
     this.flash("이미지를 불러오는 중…");
     try {
       const res = await fetch(url, { mode: "cors" });
+      if (!this.mounted || this.generation !== generation) return;
       if (!res.ok) throw new Error("fetch failed");
       const blob = await res.blob();
+      if (!this.mounted || this.generation !== generation) return;
       if (!blob.type.startsWith("image/")) throw new Error("not an image");
       this.blobToEditor(blob, decodeURIComponent(url.split("/").pop() || "이미지"));
     } catch {
+      if (!this.mounted || this.generation !== generation) return;
       this.flash("이 사이트의 이미지는 바로 가져올 수 없어요 · 이미지를 복사해 Ctrl/Cmd+V로 붙여넣어보세요");
     }
   };
@@ -341,24 +365,46 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
   };
 
   // ---------- nav ----------
-  private goHome = () => this.setState({ view: "home" });
-  private goGallery = () => this.setState({ view: "gallery" });
-  private openEditor = (sc: EditorImage) =>
+  private invalidate() {
+    this.generation++;
+    const request = Symbol();
+    this.request = request;
+    this.activePointer = null;
+    this.cancelScheduled();
+    this.brushBuf = [];
+    this.engine.invalidatePreparation();
+    clearTimeout(this.toastTimer ?? undefined);
+    if (this.mounted) this.setState({
+      processing: false, manualReady: false, manualError: "", notice: "", engine: "idle",
+      dragging: false, brushPts: [], cursorPos: null, engineMsg: "", toast: "",
+    }, () => {
+      if (this.isCurrent(request)) this.request = null;
+    });
+  }
+  private isCurrent(request: symbol) {
+    return this.mounted && this.request === request;
+  }
+  private goHome = () => {
+    this.invalidate();
+    this.setState({ view: "home" });
+  };
+  private goGallery = () => {
+    this.invalidate();
+    this.setState({ view: "gallery" });
+  };
+  private openEditor = (sc: EditorImage) => {
+    this.invalidate();
     this.setState({
       view: "editor",
       editorImage: sc,
       processed: false,
       processing: false,
       resultSrc: null,
-      sel: null,
-      lassoPts: [],
-      wandPt: null,
       brushPts: [],
       tool: "auto",
       compareOn: false,
-      hasLassoSel: false,
-      lassoOp: "new",
     });
+  };
 
   private onUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files && e.target.files[0];
@@ -368,111 +414,115 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
   };
 
   // ---------- tools ----------
-  // ALL tools share one result stream: each tool works on top of the current
-  // result via baseSrc(), so switching tools never loses progress.
-  private baseSrc() {
-    return this.state.resultSrc || (this.state.editorImage && this.state.editorImage.photo) || "";
-  }
-  private effTol() {
-    return this.state.tolTouched ? this.state.tol : this.props.autoTol ?? 60;
-  }
+  // Auto and manual tools refine the current result. Object clicks start fresh
+  // from the original so another object can be selected without losing pixels.
   private setTool = (t: Tool) => {
-    this.engine.clearSelection();
+    if (this.request || this.activePointer !== null) return;
+    this.invalidate();
+    const generation = this.generation;
     this.setState({
-      tool: t,
-      sel: null,
-      lassoPts: [],
-      wandPt: null,
-      compareOn: false,
-      hasLassoSel: false,
-      lassoOp: "new",
-      brushPts: [],
-      cursorPos: null,
+      tool: t, compareOn: false,
+    }, () => {
+      if (!this.mounted || this.generation !== generation) return;
+      if (t === "brush") void this.prepareManual();
     });
-    // lasso/brush need prepLasso to set up the working raster
-    if (t === "lasso" || t === "brush") {
-      const img = this.state.editorImage;
-      if (img) {
-        void this.engine.prepLasso(img.photo, this.state.resultSrc).then(({ has }) => {
-          this.setState({ hasLassoSel: has });
-        });
-      }
+  };
+
+  private async prepareRaster(request: symbol, photo: string, result: string | null) {
+    this.setState({ manualReady: false, manualError: "", engineMsg: "수동 편집 준비 중…" });
+    try {
+      await this.engine.prepBrush(photo, result);
+      if (!this.isCurrent(request)) return;
+      this.setState({ manualReady: true, engineMsg: "" });
+    } catch (error) {
+      if (!this.isCurrent(request)) return;
+      this.setState({
+        manualReady: false, engineMsg: "",
+        manualError: `편집 준비에 실패했어요. ${error instanceof Error ? error.message : "이미지를 다시 확인해 주세요."}`,
+      });
+    }
+  }
+
+  private prepareManual = async () => {
+    const sc = this.state.editorImage;
+    if (!sc || !this.mounted || this.state.view !== "editor" || this.request || this.activePointer !== null) return;
+    const request = Symbol();
+    this.request = request;
+    this.setState({ processing: true });
+    await this.prepareRaster(request, sc.photo, this.state.resultSrc);
+    if (!this.isCurrent(request)) return;
+    this.setState({ processing: false }, () => {
+      if (this.isCurrent(request)) this.request = null;
+    });
+  };
+  private toggleCompare = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (this.request || this.activePointer !== null) return;
+    this.cancelScheduled();
+    this.setState({ compareOn: !!e.target.checked, cursorPos: null });
+  };
+  private setBrushAdd = () => {
+    if (this.request || this.activePointer !== null || !this.state.manualReady) return;
+    this.setState({ brushOp: "add" });
+  };
+  private setBrushSub = () => {
+    if (this.request || this.activePointer !== null || !this.state.manualReady) return;
+    this.setState({ brushOp: "sub" });
+  };
+  private onBrushSize = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (this.request || this.activePointer !== null || !this.state.manualReady) return;
+    this.setState({ brushSize: +e.target.value });
+  };
+
+  private selectObject = async (pt: Pt) => {
+    const sc = this.state.editorImage;
+    if (!sc || this.request) return;
+    const request = Symbol();
+    this.request = request;
+    this.setState({ processing: true, notice: "", engineMsg: "객체 선택 모델 불러오는 중…" });
+    try {
+      const out = await this.engine.clickKeep(sc.photo, pt, (engineMsg) => {
+        if (this.isCurrent(request)) this.setState({ engineMsg });
+      });
+      if (!this.isCurrent(request)) return;
+      this.setState({ processed: true, resultSrc: out, compareOn: false });
+    } catch (error) {
+      if (!this.isCurrent(request)) return;
+      this.setState({ notice: `객체를 선택하지 못했어요. ${error instanceof Error ? error.message : "다른 지점을 클릭해 주세요."}` });
+    } finally {
+      if (this.isCurrent(request)) this.setState({ processing: false, engineMsg: "" }, () => {
+        if (this.isCurrent(request)) this.request = null;
+      });
     }
   };
-  private resetSel = () => {
-    this.engine.clearSelection();
-    this.paintOverlay();
-    this.setState({ sel: null, lassoPts: [], wandPt: null, brushPts: [], hasLassoSel: false, lassoOp: "new" });
-  };
-  private onTol = (e: React.ChangeEvent<HTMLInputElement>) => this.setState({ tol: +e.target.value, tolTouched: true });
-  private toggleCompare = (e: React.ChangeEvent<HTMLInputElement>) => this.setState({ compareOn: !!e.target.checked });
-  private setOp = (op: LassoOp) => this.setState({ lassoOp: op });
-  private toggleMagnetic = (e: React.ChangeEvent<HTMLInputElement>) => this.setState({ magnetic: !!e.target.checked });
-  private setBrushAdd = () => this.setState({ brushOp: "add" });
-  private setBrushSub = () => this.setState({ brushOp: "sub" });
-  private onBrushSize = (e: React.ChangeEvent<HTMLInputElement>) => this.setState({ brushSize: +e.target.value });
 
   private runRemoval = async () => {
     const sc = this.state.editorImage;
-    if (!sc) return;
-    this.setState({ processing: true });
-    const t0 = Date.now();
-    let out: string;
+    if (!sc || this.request || this.state.tool !== "auto") return;
+    const request = Symbol();
+    this.request = request;
+    const modelKey = this.props.model || "ormbg";
+    const currentSrc = this.state.resultSrc;
+    this.setState({ processing: true, notice: "", engine: "loading", engineMsg: "AI 엔진 불러오는 중…" });
     try {
-      const tool = this.state.tool;
-      const tol = this.effTol();
-      const base = this.baseSrc();
-      if (tool === "auto") {
-        try {
-          const modelKey = this.props.model || "ormbg";
-          this.setState({ engine: "loading", engineMsg: "AI 엔진 불러오는 중…" });
-          await this.engine.ensureModel(modelKey, (msg) => this.setState({ engineMsg: msg }));
-          this.setState({ engine: "ready", engineMsg: "" });
-          out = await this.engine.rmbgRemove(base, modelKey);
-        } catch (e) {
-          console.error("[AI bg-remove] fallback:", e);
-          const img = await this.engine.loadImage(base);
-          out = this.engine.autoRemove(img, tol);
-          this.setState({ engine: "error", engineMsg: "" });
-          this.flash("AI 엔진을 불러오지 못해 기본 엔진으로 처리했어요");
-        }
-      } else if (tool === "rect" && this.state.sel && this.state.sel.w > 0.02) {
-        const img = await this.engine.loadImage(base);
-        out = this.engine.rectKeep(img, this.state.sel, tol);
-      } else if (tool === "lasso" && this.strokeMask) {
-        const hadPriorResult = !!this.state.resultSrc;
-        out = await this.engine.lassoApplyRun(base, this.strokeMask, this.strokeZone!, this.strokeOp, hadPriorResult);
-        this.strokeMask = null;
-      } else if (tool === "brush" && this.strokeMask) {
-        out = await this.engine.brushApplyRun(base, this.strokeMask, this.strokeOp as BrushOp);
-        this.strokeMask = null;
-      } else if (tool === "click" && this.state.wandPt) {
-        const img = await this.engine.loadImage(base);
-        out = this.engine.wandRemove(img, this.state.wandPt, tol);
-      } else {
-        const img = await this.engine.loadImage(base);
-        out = this.engine.autoRemove(img, tol);
-      }
-    } catch {
-      this.setState({ processing: false });
-      this.flash("이미지를 처리할 수 없습니다");
-      return;
-    }
-    const wait = Math.max(0, 350 - (Date.now() - t0));
-    setTimeout(() => {
-      this.setState({ processing: false, processed: true, resultSrc: out, compareOn: false }, () => {
-        // For lasso/brush, rebuild the engine's working raster from the NEW
-        // result so the next stroke sees the current cut's transparency (its
-        // real object/background boundary). Without this, add/exclude after the
-        // first stroke analyze a stale raster and misbehave.
-        const { tool, editorImage } = this.state;
-        if ((tool === "lasso" || tool === "brush") && editorImage) {
-          void this.engine.prepLasso(editorImage.photo, out).then(({ has }) => {
-            this.setState({ hasLassoSel: has }, () => this.paintOverlay());
-          });
-        }
+      await this.engine.ensureModel(modelKey, (engineMsg) => {
+        if (this.isCurrent(request)) this.setState({ engineMsg });
       });
-    }, wait);
+      if (!this.isCurrent(request)) return;
+      this.setState({ engine: "ready", engineMsg: "AI로 배경 분석 중…" });
+      const out = await this.engine.rmbgRemove(sc.photo, modelKey, currentSrc);
+      if (!this.isCurrent(request)) return;
+      this.setState({ processed: true, resultSrc: out, compareOn: false });
+    } catch (error) {
+      if (!this.isCurrent(request)) return;
+      this.setState({
+        engine: "error",
+        notice: `AI 배경 제거에 실패했어요. 기존 이미지는 변경하지 않았어요. ${error instanceof Error ? error.message : "다시 시도해 주세요."}`,
+      });
+    } finally {
+      if (this.isCurrent(request)) this.setState({ processing: false, engineMsg: "" }, () => {
+        if (this.isCurrent(request)) this.request = null;
+      });
+    }
   };
 
   // ---------- pointer ----------
@@ -482,24 +532,20 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
   }
 
   private onDown = (e: React.PointerEvent) => {
-    if (this.state.processing) return;
+    if (this.request || this.activePointer !== null || e.button !== 0) return;
     const t = this.state.tool;
+    if (t === "brush" && (!this.state.manualReady || this.state.compareOn)) return;
+    if (t === "brush") this.activePointer = e.pointerId;
     const [fx, fy] = this.frac(e);
-    if (t === "rect") {
-      this.dragStart = { fx, fy };
-      this.setState({ dragging: true, processed: false, sel: { x: fx, y: fy, w: 0, h: 0 }, lassoPts: [] });
-    } else if (t === "lasso") {
-      this.lassoBuf = [[fx, fy]];
-      this.setState({ dragging: true, processed: false, lassoPts: [[fx, fy]] });
-    } else if (t === "brush") {
+    if (t === "brush") {
       // draw first dot immediately for instant feedback; the overlay canvas is
       // repainted cheaply (no per-move PNG encoding).
       this.brushBuf = [[fx, fy]];
       this.engine.paintBrushDot([fx, fy], this.state.brushSize, this.state.brushOp, null);
       this.paintOverlay();
-      this.setState({ dragging: true, processed: false, brushPts: [[fx, fy]], hasLassoSel: true });
+      this.setState({ dragging: true, brushPts: [[fx, fy]] });
     } else if (t === "click") {
-      this.setState({ wandPt: [fx, fy] }, () => void this.runRemoval());
+      if (!this.state.resultSrc || this.state.compareOn) void this.selectObject([fx, fy]);
     }
     try {
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
@@ -509,27 +555,18 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
   };
 
   private onMove = (e: React.PointerEvent) => {
+    if (this.request || !this.state.manualReady || this.state.compareOn) return;
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const px = e.clientX - r.left,
       py = e.clientY - r.top;
     const t = this.state.tool;
-    if (t === "brush" && !this.state.dragging) {
+    if (t === "brush" && this.activePointer === null) {
       this.scheduleState({ cursorPos: [px, py] });
       return;
     }
-    if (!this.state.dragging) return;
+    if (this.activePointer !== e.pointerId) return;
     const [fx, fy] = this.frac(e);
-    if (t === "rect") {
-      const d = this.dragStart!;
-      this.scheduleState({ sel: { x: Math.min(d.fx, fx), y: Math.min(d.fy, fy), w: Math.abs(fx - d.fx), h: Math.abs(fy - d.fy) } });
-    } else if (t === "lasso") {
-      const p: Pt = [fx, fy];
-      const last = this.lassoBuf[this.lassoBuf.length - 1];
-      if (!last || Math.hypot(p[0] - last[0], p[1] - last[1]) > 0.006) {
-        this.lassoBuf.push(p);
-        this.scheduleState({ lassoPts: this.lassoBuf.slice() });
-      }
-    } else if (t === "brush") {
+    if (t === "brush") {
       const p: Pt = [fx, fy];
       const last = this.brushBuf[this.brushBuf.length - 1] ?? null;
       if (!last || Math.hypot(p[0] - last[0], p[1] - last[1]) > 0.004) {
@@ -546,77 +583,61 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
     }
   };
 
-  private onUp = () => {
-    // drop any queued (throttled) point update — commit reads the full buffers.
+  private onUp = (e: React.PointerEvent) => {
+    if (this.activePointer !== e.pointerId) return;
+    const pt = this.frac(e);
+    if (this.state.tool === "brush") this.brushBuf.push(pt);
+    this.activePointer = null;
     this.cancelScheduled();
-    if (this.state.tool === "lasso" && this.state.dragging) this.commitLasso();
-    if (this.state.tool === "brush" && this.state.dragging) this.commitBrush();
-    this.setState({ dragging: false });
+    void this.commitStroke();
   };
 
-  private commitLasso() {
-    const pts = this.lassoBuf;
-    if (pts.length < 3 || !this.engine.work) {
-      this.lassoBuf = [];
-      this.setState({ lassoPts: [] });
-      return;
-    }
-    const op = this.state.lassoOp;
-    const tol = this.effTol();
-    let mask: HTMLCanvasElement, zone: HTMLCanvasElement, recognized: boolean;
-    if (op === "add") {
-      const r = this.engine.refineAddMask(pts, this.state.magnetic, tol);
-      mask = zone = r.mask;
-      recognized = r.recognized;
-    } else if (op === "sub") {
-      const r = this.engine.refineSubMask(pts, this.state.magnetic, tol);
-      mask = r.mask;
-      zone = mask;
-      recognized = r.recognized;
-    } else if (this.state.magnetic) {
-      const r = this.engine.refineLassoMask(pts, tol);
-      mask = r.mask;
-      zone = r.zone;
-      recognized = r.recognized;
-    } else {
-      mask = zone = this.engine.rawLassoMask(pts);
-      recognized = false;
-    }
-    void recognized;
-    this.strokeMask = mask;
-    this.strokeZone = zone;
-    this.strokeOp = op;
-    this.engine.drawLassoStroke(mask, op);
-    this.lassoBuf = [];
-    this.setState(
-      { lassoPts: [], hasLassoSel: this.engine.hasSelection(), lassoOp: op === "new" ? "add" : op },
-      () => void this.runRemoval(),
-    );
-  }
-
-  private commitBrush() {
-    const pts = this.brushBuf;
-    if (pts.length < 1 || !this.engine.work) {
-      this.brushBuf = [];
-      this.setState({ brushPts: [] });
-      return;
-    }
-    // Build the mask from brushPts directly (not from the selection overlay
-    // canvas) — when "sub" is used, destination-out modifies that overlay
-    // itself, so it can't double as the erase mask.
-    const mask = this.engine.brushMask(pts, this.state.brushSize);
-    const op = this.state.brushOp;
-    this.strokeMask = mask;
-    this.strokeZone = mask;
-    this.strokeOp = op;
+  private onCancel = (e: React.PointerEvent) => {
+    if (this.activePointer !== e.pointerId) return;
+    this.activePointer = null;
+    this.cancelScheduled();
     this.brushBuf = [];
-    this.setState({ brushPts: [], hasLassoSel: this.engine.hasSelection() }, () => void this.runRemoval());
+    this.setState({ dragging: false, brushPts: [], cursorPos: null });
+    // Rebuild the preview from committed pixels, discarding any painted dots.
+    void this.prepareManual();
+  };
+
+  private async commitStroke() {
+    const { editorImage: sc, brushOp, brushSize, resultSrc } = this.state;
+    const pts = this.brushBuf;
+    this.brushBuf = [];
+    this.setState({ dragging: false, brushPts: [], cursorPos: null });
+    if (!sc || this.request || !this.state.manualReady || !this.engine.work) return;
+    if (pts.length < 1) return;
+    const request = Symbol();
+    this.request = request;
+    this.setState({ processing: true, manualReady: false, notice: "", engineMsg: "영역을 처리하는 중…" });
+    try {
+      const mask = this.engine.brushMask(pts, brushSize);
+      const out = await this.engine.brushApplyRun(resultSrc || sc.photo, mask, brushOp);
+      if (!this.isCurrent(request)) return;
+      this.setState({
+        processed: true, resultSrc: out, compareOn: false,
+      });
+      await this.prepareRaster(request, sc.photo, out);
+    } catch (error) {
+      if (!this.isCurrent(request)) return;
+      this.setState({
+        notice: `${error instanceof Error ? error.message : "영역을 처리하지 못했어요."} 기존 이미지는 변경하지 않았어요. 다시 시도해 주세요.`,
+      });
+      await this.prepareRaster(request, sc.photo, resultSrc);
+    } finally {
+      if (this.isCurrent(request)) this.setState({ processing: false, engineMsg: "" }, () => {
+        if (this.isCurrent(request)) this.request = null;
+      });
+    }
   }
 
   // ---------- gallery / save ----------
   private flash = (m: string) => {
+    if (!this.mounted) return;
     this.setState({ toast: m });
-    if (this.toastTimer) clearTimeout(this.toastTimer);
+    clearTimeout(this.toastTimer ?? undefined);
     this.toastTimer = setTimeout(() => this.setState({ toast: "" }), 2200);
   };
   private saveCurrent = async () => {
@@ -740,10 +761,11 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
   };
   /**
    * Re-open a gallery item for further editing.
-   * - `photo` = original (for color sampling / compare / magnetic lasso). Falls back to cutout.
+   * - `photo` = original (for color sampling / compare). Falls back to cutout.
    * - `resultSrc` = saved cutout so the canvas starts on the processed image, not the raw original.
    */
   private reeditItem = (it: SavedItem) => {
+    this.invalidate();
     const original = it.photo || it.src;
     const cutout = it.src || it.photo;
     this.setState({
@@ -752,14 +774,9 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
       processed: !!cutout,
       processing: false,
       resultSrc: cutout || null,
-      sel: null,
-      lassoPts: [],
-      wandPt: null,
       brushPts: [],
       tool: "auto",
       compareOn: false,
-      hasLassoSel: false,
-      lassoOp: "new",
     });
   };
   private filterSaved() {
@@ -769,9 +786,9 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
   }
 
   render() {
-    const accent = this.props.accent || "#3d5afe";
+    const accent = this.props.accent || "#000";
     return (
-      <div className="rbg-root" style={{ ["--accent" as string]: accent } as CSSProperties}>
+      <div className="rbg-root pdf-editor-root" style={{ ["--accent" as string]: accent } as CSSProperties}>
         <style>{GLOBAL_CSS}</style>
         <div style={{ display: "flex", flexDirection: "column", height: "100%", width: "100%", overflow: "hidden", background: "var(--rbg-surface,#fff)" }}>
           {this.renderTopbar()}
@@ -849,7 +866,7 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
               fontSize: 11.5,
               color: "var(--rbg-text-subtle,#7a7a82)",
               marginBottom: 22,
-              fontFamily: "'Spline Sans Mono',monospace",
+              fontFamily: "ui-monospace,SFMono-Regular,Menlo,monospace",
             }}
           >
             <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--accent)" }}></span>
@@ -956,22 +973,14 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
   private renderEditor() {
     const s = this.state;
     const tool = s.tool;
-    const hasRect = !!(s.sel && s.sel.w > 0.02 && s.sel.h > 0.02);
-    const hasSelection = tool === "rect" ? hasRect : tool === "lasso" ? s.hasLassoSel : false;
-    const overlayActive = !!s.editorImage && !s.processing && (tool === "rect" || tool === "lasso" || tool === "click" || tool === "brush");
-    const stageSrc = s.processed && !s.compareOn && s.resultSrc ? s.resultSrc : s.editorImage ? s.editorImage.photo : "";
-    const primaryEnabled = tool === "auto" ? true : hasSelection;
-    const primaryLabel = tool === "rect" ? "선택 영역 추출" : tool === "lasso" ? "올가미 영역 추출" : "AI로 배경 제거";
-    const primaryHint =
-      tool === "rect"
-        ? hasRect
-          ? ""
-          : "이미지 위에서 영역을 드래그하세요"
-        : tool === "lasso"
-        ? s.hasLassoSel
-          ? "추가(+)·제외(−)로 더 다듬을 수 있어요"
-          : "외곽선을 따라 천천히 그려보세요"
-        : "AI가 피사체를 인식해 배경만 지워요";
+    const manual = tool === "brush";
+    const manualDisabled = !s.manualReady || s.processing || s.dragging;
+    const overlayActive = !!s.editorImage && !s.processing && ((manual && s.manualReady && !s.compareOn) || (tool === "click" && (!s.resultSrc || s.compareOn)));
+    const showingResult = s.processed && (manual ? s.compareOn : !s.compareOn);
+    const stageSrc = showingResult && s.resultSrc ? s.resultSrc : s.editorImage ? s.editorImage.photo : "";
+    const primaryEnabled = tool === "auto" && !s.processing;
+    const primaryLabel = s.engine === "error" ? "AI 배경 제거 다시 시도" : "AI로 배경 제거";
+    const primaryHint = "AI가 원본을 분석해 현재 결과의 배경을 더 지워요";
 
     const toolStyle = (on: boolean): CSSProperties => ({
       width: "100%",
@@ -1008,8 +1017,8 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
       fontSize: 14.5,
       fontWeight: 700,
       transition: ".12s",
-      background: primaryEnabled ? "var(--accent)" : "var(--rbg-border,#ececed)",
-      color: primaryEnabled ? "#fff" : "var(--rbg-text-faint,#b0b0b8)",
+      background: primaryEnabled ? "var(--pdfe-button-bg,var(--accent))" : "var(--rbg-border,#ececed)",
+      color: primaryEnabled ? "var(--pdfe-button-color,#fff)" : "var(--rbg-text-faint,#b0b0b8)",
       cursor: primaryEnabled ? "pointer" : "not-allowed",
       boxShadow: primaryEnabled ? "0 6px 18px color-mix(in srgb, var(--accent) 34%, transparent)" : undefined,
     };
@@ -1024,8 +1033,8 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
       fontSize: 13,
       fontWeight: 700,
       transition: ".12s",
-      background: dlOn ? "var(--accent)" : "var(--rbg-surface-soft,#f2f2f3)",
-      color: dlOn ? "#fff" : "var(--rbg-text-faint,#c0c0c6)",
+      background: dlOn ? "var(--pdfe-button-bg,var(--accent))" : "var(--rbg-surface-soft,#f2f2f3)",
+      color: dlOn ? "var(--pdfe-button-color,#fff)" : "var(--rbg-text-faint,#c0c0c6)",
       cursor: dlOn ? "pointer" : "not-allowed",
     };
     const saveBtnStyle: CSSProperties = {
@@ -1035,28 +1044,25 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
       fontSize: 13,
       fontWeight: 600,
       transition: ".12s",
-      border: "1px solid var(--rbg-border,#e2e2e6)",
-      color: dlOn ? "var(--rbg-text,#17171a)" : "var(--rbg-text-faint,#c0c0c6)",
+      border: "1px solid var(--pdfe-button-border,var(--rbg-border,#e2e2e6))",
+      color: dlOn ? "var(--pdfe-button-color,var(--rbg-text,#17171a))" : "var(--rbg-text-faint,#c0c0c6)",
       cursor: dlOn ? "pointer" : "not-allowed",
     };
     const engineMap: Record<EngineStatus, [string, string]> = {
       idle: ["준비 대기", "var(--rbg-text-faint,#c0c0c6)"],
       loading: [s.engineMsg || "불러오는 중", "#f59e0b"],
       ready: ["준비됨", "#16a34a"],
-      error: ["오프라인 · 기본 엔진", "#e0553d"],
+      error: ["AI 처리 실패", "#e0553d"],
     };
     const eng = engineMap[s.engine] || engineMap.idle;
     const modelLabel = MODEL_LABELS[this.props.model || "ormbg"] || "BiRefNet lite";
-    const stageCursor = tool === "click" ? "pointer" : tool === "brush" ? "none" : tool === "rect" || tool === "lasso" ? "crosshair" : "default";
-    const lassoStr = s.lassoPts.map((p) => (p[0] * 100).toFixed(2) + "," + (p[1] * 100).toFixed(2)).join(" ");
-    const showRect = tool === "rect" && !!s.sel && s.sel.w > 0;
-    const showLasso = tool === "lasso" && s.lassoPts.length > 1;
-    const showSelMask = (tool === "lasso" || tool === "brush") && !s.processing;
-    const showClickHint = tool === "click" && !s.processing && !s.processed;
-    const showDone = s.processed && !s.processing && !s.compareOn;
-    const showPrimary = !!s.editorImage && !s.processed && tool !== "click" && tool !== "brush";
-    const processMsg = s.engine === "loading" ? s.engineMsg || "AI 엔진 불러오는 중…" : tool === "auto" ? "AI로 배경 분석 중…" : "영역을 처리하는 중…";
-    const processSub = s.engine === "loading" ? "최초 1회만 모델을 내려받아요 · 수십 초 소요될 수 있어요" : "";
+    const stageCursor = tool === "click" ? "pointer" : tool === "brush" ? "none" : "default";
+    const showSelMask = manual && s.manualReady && !s.processing && !s.compareOn;
+    const showClickHint = tool === "click" && !s.processing && (!s.resultSrc || s.compareOn);
+    const showDone = s.processed && !s.processing && !s.notice && !s.manualError && showingResult;
+    const showPrimary = !!s.editorImage && tool === "auto";
+    const processMsg = s.engineMsg || (tool === "click" ? "클릭한 객체를 분석하는 중…" : tool === "auto" ? "AI로 배경 분석 중…" : "영역을 처리하는 중…");
+    const processSub = tool === "click" ? "처음 사용할 때 객체 선택 모델을 내려받아요" : s.engine === "loading" ? "최초 1회만 모델을 내려받아요 · 수십 초 소요될 수 있어요" : "";
 
     return (
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
@@ -1064,7 +1070,7 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
           <button
             className="rbg-topbar-back"
             onClick={this.goHome}
-            style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13.5, fontWeight: 600, color: "var(--rbg-text-muted,#6b6b72)", padding: "7px 10px", borderRadius: 9 }}
+            style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13.5, fontWeight: 600, color: "var(--pdfe-button-color,var(--rbg-text-muted,#6b6b72))", padding: "7px 10px", borderRadius: 9 }}
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M15 18l-6-6 6-6"></path>
@@ -1092,11 +1098,11 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
 
         <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
           <div style={{ width: 222, flex: "none", borderRight: "1px solid var(--rbg-border-soft,#ededed)", padding: "18px 16px", overflowY: "auto", background: "var(--rbg-panel,#fcfcfd)", position: "relative" }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: "var(--rbg-text-subtle,#a2a2aa)", letterSpacing: ".4px", margin: "2px 4px 12px", fontFamily: "'Spline Sans Mono',monospace" }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "var(--rbg-text-subtle,#a2a2aa)", letterSpacing: ".4px", margin: "2px 4px 12px", fontFamily: "ui-monospace,SFMono-Regular,Menlo,monospace" }}>
               선택 도구
             </div>
 
-            <button onClick={() => this.setTool("auto")} style={toolStyle(tool === "auto")}>
+            <button disabled={s.processing || s.dragging} onClick={() => this.setTool("auto")} style={toolStyle(tool === "auto")}>
               <span
                 style={{
                   width: 34,
@@ -1124,13 +1130,13 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
             {tool === "auto" && (
               <div style={{ display: "flex", alignItems: "center", gap: 7, margin: "0 2px 8px", padding: "7px 10px", borderRadius: 9, background: "var(--rbg-surface-soft,#f5f5f7)", fontSize: 11, color: "var(--rbg-text-subtle,#7a7a82)" }}>
                 <span style={{ width: 7, height: 7, borderRadius: "50%", background: eng[1], boxShadow: `0 0 0 3px color-mix(in srgb, ${eng[1]} 18%, transparent)` }}></span>
-                <span style={{ fontFamily: "'Spline Sans Mono',monospace", fontWeight: 600, color: "var(--rbg-text-muted,#4a4a52)" }}>{modelLabel}</span>
+                <span style={{ fontFamily: "ui-monospace,SFMono-Regular,Menlo,monospace", fontWeight: 600, color: "var(--rbg-text-muted,#4a4a52)" }}>{modelLabel}</span>
                 <span style={{ color: "var(--rbg-text-faint,#c0c0c6)" }}>·</span>
                 <span>{eng[0]}</span>
               </div>
             )}
 
-            <button onClick={() => this.setTool("click")} style={toolStyle(tool === "click")}>
+            <button disabled={s.processing || s.dragging} onClick={() => this.setTool("click")} style={toolStyle(tool === "click")}>
               <span
                 style={{
                   width: 34,
@@ -1149,63 +1155,12 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
                 </svg>
               </span>
               <span style={{ textAlign: "left" }}>
-                <span style={{ display: "block", fontSize: 13.5, fontWeight: 700 }}>클릭 지우개</span>
-                <span style={{ display: "block", fontSize: 11.5, color: "var(--rbg-text-subtle,#9a9aa2)", marginTop: 1 }}>배경을 콕 찍어 삭제</span>
+                <span style={{ display: "block", fontSize: 13.5, fontWeight: 700 }}>객체 선택</span>
+                <span style={{ display: "block", fontSize: 11.5, color: "var(--rbg-text-subtle,#9a9aa2)", marginTop: 1 }}>남길 객체를 클릭해 선택</span>
               </span>
             </button>
 
-            <button onClick={() => this.setTool("rect")} style={toolStyle(tool === "rect")}>
-              <span
-                style={{
-                  width: 34,
-                  height: 34,
-                  flex: "none",
-                  borderRadius: 10,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  background: icoBg(tool === "rect"),
-                  color: icoFg(tool === "rect"),
-                }}
-              >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" strokeDasharray="3 2.5">
-                  <rect x="4" y="5" width="16" height="14" rx="2"></rect>
-                </svg>
-              </span>
-              <span style={{ textAlign: "left" }}>
-                <span style={{ display: "block", fontSize: 13.5, fontWeight: 700 }}>사각형 선택</span>
-                <span style={{ display: "block", fontSize: 11.5, color: "var(--rbg-text-subtle,#9a9aa2)", marginTop: 1 }}>영역을 드래그해 추출</span>
-              </span>
-            </button>
-
-            <button onClick={() => this.setTool("lasso")} style={toolStyle(tool === "lasso")}>
-              <span
-                style={{
-                  width: 34,
-                  height: 34,
-                  flex: "none",
-                  borderRadius: 10,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  background: icoBg(tool === "lasso"),
-                  color: icoFg(tool === "lasso"),
-                }}
-              >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 4c4.4 0 8 2.7 8 6 0 3.3-3.6 6-8 6-1 0-2-.1-2.9-.4"></path>
-                  <path d="M9 15.6c-2.4-1-4-2.9-4-5C5 6.7 8 4.2 12 4"></path>
-                  <path d="M8 16c0 1.6.4 3 .4 3"></path>
-                  <path d="M6.4 19a1.4 1.4 0 1 0 2.8 0 1.4 1.4 0 0 0-2.8 0"></path>
-                </svg>
-              </span>
-              <span style={{ textAlign: "left" }}>
-                <span style={{ display: "block", fontSize: 13.5, fontWeight: 700 }}>스마트 올가미</span>
-                <span style={{ display: "block", fontSize: 11.5, color: "var(--rbg-text-subtle,#9a9aa2)", marginTop: 1 }}>영역을 그리면 객체를 인식해요</span>
-              </span>
-            </button>
-
-            <button onClick={() => this.setTool("brush")} style={toolStyle(tool === "brush")}>
+            <button disabled={s.processing || s.dragging} onClick={() => this.setTool("brush")} style={toolStyle(tool === "brush")}>
               <span
                 style={{
                   width: 34,
@@ -1232,73 +1187,41 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
 
             {tool === "brush" && (
               <div style={{ marginTop: 8, padding: 13, border: "1px solid var(--rbg-border,#ececec)", borderRadius: 12, background: "var(--rbg-surface,#fff)" }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--rbg-text-subtle,#a2a2aa)", marginBottom: 9, fontFamily: "'Spline Sans Mono',monospace" }}>브러시 설정</div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--rbg-text-subtle,#a2a2aa)", marginBottom: 9, fontFamily: "ui-monospace,SFMono-Regular,Menlo,monospace" }}>브러시 설정</div>
                 <div style={{ display: "flex", gap: 5, marginBottom: 11 }}>
-                  <button onClick={this.setBrushAdd} style={segStyle(s.brushOp === "add")}>
+                  <button disabled={manualDisabled} onClick={this.setBrushAdd} style={segStyle(s.brushOp === "add")}>
                     추가 +
                   </button>
-                  <button onClick={this.setBrushSub} style={segStyle(s.brushOp === "sub")}>
+                  <button disabled={manualDisabled} onClick={this.setBrushSub} style={segStyle(s.brushOp === "sub")}>
                     제거 −
                   </button>
                 </div>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 9 }}>
                   <span style={{ fontSize: 12, fontWeight: 600, color: "var(--rbg-text-muted,#4a4a52)" }}>브러시 크기</span>
-                  <span style={{ fontSize: 11.5, fontWeight: 600, color: "var(--accent)", fontFamily: "'Spline Sans Mono',monospace" }}>{s.brushSize}px</span>
+                  <span style={{ fontSize: 11.5, fontWeight: 600, color: "var(--accent)", fontFamily: "ui-monospace,SFMono-Regular,Menlo,monospace" }}>{s.brushSize}px</span>
                 </div>
-                <input type="range" min={10} max={80} step={5} value={s.brushSize} onChange={this.onBrushSize} style={{ width: "100%", accentColor: "var(--accent)" }} />
+                <input disabled={manualDisabled} type="range" min={10} max={80} step={5} value={s.brushSize} onChange={this.onBrushSize} style={{ width: "100%", accentColor: "var(--accent)" }} />
                 <div style={{ fontSize: 11, color: "var(--rbg-text-subtle,#a2a2aa)", marginTop: 9, lineHeight: 1.5 }}>
-                  {s.brushOp === "add" ? "칠한 영역의 객체를 복원해요. 크기를 조절해가며 칠해보세요." : "칠한 영역을 지워요. 크기를 조절해가며 칠해보세요."}
-                </div>
-              </div>
-            )}
-
-            {tool === "lasso" && (
-              <div style={{ marginTop: 8, padding: 13, border: "1px solid var(--rbg-border,#ececec)", borderRadius: 12, background: "var(--rbg-surface,#fff)" }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--rbg-text-subtle,#a2a2aa)", marginBottom: 9, fontFamily: "'Spline Sans Mono',monospace" }}>올가미 다듬기</div>
-                <div style={{ display: "flex", gap: 5, marginBottom: 11 }}>
-                  <button onClick={() => this.setOp("new")} style={segStyle(s.lassoOp === "new")}>
-                    새 영역
-                  </button>
-                  <button onClick={() => this.setOp("add")} style={segStyle(s.lassoOp === "add")}>
-                    추가 +
-                  </button>
-                  <button onClick={() => this.setOp("sub")} style={segStyle(s.lassoOp === "sub")}>
-                    제외 −
-                  </button>
-                </div>
-                <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 12.5, color: "var(--rbg-text-muted,#4a4a52)", cursor: "pointer", userSelect: "none" }}>
-                  <span style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M12 3l1.6 4.9L18.5 9.5 13.6 11 12 16l-1.6-5L5.5 9.5l4.9-1.6z"></path>
-                    </svg>
-                    객체 인식 보정
-                  </span>
-                  <input type="checkbox" checked={s.magnetic} onChange={this.toggleMagnetic} style={{ accentColor: "var(--accent)", width: 15, height: 15 }} />
-                </label>
-                <div style={{ fontSize: 11, color: "var(--rbg-text-subtle,#a2a2aa)", marginTop: 9, lineHeight: 1.5 }}>
-                  {s.magnetic
-                    ? "여백을 두고 그리면 그 안에서 배경과 물체를 구분해 올가미를 자동으로 맞춰요. 물체 안쪽만 그리면 그린 그대로 추가·제외돼요."
-                    : "그린 영역을 그대로 선택 영역으로 사용해요."}
+                  {s.brushOp === "add" ? "원본에서 칠한 영역을 복원해요. 크기를 조절해가며 칠해보세요." : "원본에서 칠한 영역을 결과에서 지워요. 크기를 조절해가며 칠해보세요."}
                 </div>
               </div>
             )}
 
             {tool === "click" && (
               <div style={{ marginTop: 12, padding: 14, border: "1px solid var(--rbg-border,#ececec)", borderRadius: 12, background: "var(--rbg-surface,#fff)" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 9 }}>
-                  <span style={{ fontSize: 12, fontWeight: 600, color: "var(--rbg-text-muted,#4a4a52)" }}>인식 강도</span>
-                  <span style={{ fontSize: 11.5, fontWeight: 600, color: "var(--accent)", fontFamily: "'Spline Sans Mono',monospace" }}>{this.effTol()}</span>
-                </div>
-                <input type="range" min={20} max={130} step={5} value={this.effTol()} onChange={this.onTol} onInput={this.onTol} style={{ width: "100%", accentColor: "var(--accent)" }} />
-                <div style={{ fontSize: 11, color: "var(--rbg-text-subtle,#a2a2aa)", marginTop: 7, lineHeight: 1.4 }}>배경과 인접한 색을 얼마나 넓게 지울지 정해요.</div>
+                <div style={{ fontSize: 12, color: "var(--rbg-text-muted,#4a4a52)", lineHeight: 1.6 }}>SAM으로 남길 객체를 클릭하세요. 다른 객체는 원본과 비교를 켠 뒤 클릭하면 새로 선택돼요. 같은 이미지의 반복 선택은 캐시를 사용해요. 결과는 브러시로 다듬을 수 있어요.</div>
               </div>
             )}
 
-            {hasSelection && (
-              <button className="rbg-reset-sel" onClick={this.resetSel} style={{ marginTop: 12, width: "100%", padding: 9, borderRadius: 10, border: "1px solid var(--rbg-border,#ececec)", fontSize: 12.5, fontWeight: 600, color: "var(--rbg-text-muted,#6b6b72)" }}>
-                선택 초기화
-              </button>
+            {manual && (
+              <div style={{ marginTop: 12, fontSize: 12, color: "var(--rbg-text-muted,#6b6b72)", lineHeight: 1.6 }} role="status">
+                {s.manualError || (s.processing ? "편집 준비·처리 중에는 그릴 수 없어요." : s.compareOn ? "결과 미리보기 중에는 그릴 수 없어요. 미리보기를 끄면 원본에서 계속 편집할 수 있어요." : s.manualReady ? "원본 위에 그리면 결과에 적용돼요. 결과 미리보기로 확인하세요." : "수동 편집 준비가 필요해요.")}
+                {!s.processing && !s.manualReady && (
+                  <button className="rbg-reset-sel" onClick={this.prepareManual} style={{ marginTop: 8, padding: "7px 12px", border: "1px solid var(--rbg-border)" }}>편집 준비 다시 시도</button>
+                )}
+              </div>
             )}
+            {s.notice && <div role="alert" style={{ marginTop: 12, fontSize: 12, color: "var(--rbg-danger)", lineHeight: 1.6 }}>{s.notice}</div>}
           </div>
 
           <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", background: "var(--rbg-canvas,#f6f6f7)" }}>
@@ -1330,18 +1253,19 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
                   onPointerDown={this.onDown}
                   onPointerMove={this.onMove}
                   onPointerUp={this.onUp}
+                  onPointerCancel={this.onCancel}
+                  onLostPointerCapture={this.onCancel}
                   style={{ position: "absolute", inset: 0, cursor: stageCursor, touchAction: "none", pointerEvents: overlayActive ? "auto" : "none" }}
                 >
-                  {tool === "brush" && !s.processing && !!s.cursorPos && (
+                  {tool === "brush" && overlayActive && !!s.cursorPos && this.engine.work && (
                     <div
                       style={{
                         position: "absolute",
                         left: s.cursorPos[0],
                         top: s.cursorPos[1],
-                        width: s.brushSize,
-                        height: s.brushSize,
-                        marginLeft: -s.brushSize / 2,
-                        marginTop: -s.brushSize / 2,
+                        width: `${s.brushSize / this.engine.work.W * 100}%`,
+                        height: `${s.brushSize / this.engine.work.H * 100}%`,
+                        transform: "translate(-50%, -50%)",
                         border: "1.5px solid var(--accent)",
                         borderRadius: "50%",
                         pointerEvents: "none",
@@ -1351,24 +1275,6 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
                       }}
                     ></div>
                   )}
-                  <svg viewBox="0 0 100 100" preserveAspectRatio="none" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}>
-                    {showRect && (
-                      <rect
-                        x={s.sel!.x * 100}
-                        y={s.sel!.y * 100}
-                        width={s.sel!.w * 100}
-                        height={s.sel!.h * 100}
-                        fill="color-mix(in srgb, var(--accent) 14%, transparent)"
-                        stroke="var(--accent)"
-                        strokeWidth={1.6}
-                        vectorEffect="non-scaling-stroke"
-                        strokeDasharray="5 3"
-                      ></rect>
-                    )}
-                    {showLasso && (
-                      <polyline points={lassoStr} fill="none" stroke="var(--accent)" strokeWidth={1.8} vectorEffect="non-scaling-stroke" strokeLinejoin="round" strokeLinecap="round"></polyline>
-                    )}
-                  </svg>
                 </div>
 
                 {showClickHint && (
@@ -1389,7 +1295,7 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
                       backdropFilter: "blur(4px)",
                     }}
                   >
-                    지우고 싶은 배경을 클릭하세요
+                    원본에서 남길 객체를 클릭하세요
                   </div>
                 )}
 
@@ -1432,13 +1338,13 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
                     padding: "5px 10px",
                     borderRadius: 999,
                     animation: "rbg-pop .3s ease",
-                    fontFamily: "'Spline Sans Mono',monospace",
+                    fontFamily: "ui-monospace,SFMono-Regular,Menlo,monospace",
                   }}
                 >
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M20 6 9 17l-5-5"></path>
                   </svg>
-                  {tool === "auto" ? "AI 배경 제거 완료" : "배경 제거 완료"}
+                  편집 결과
                 </div>
               )}
             </div>
@@ -1446,7 +1352,7 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
             <div style={{ flex: "none", borderTop: "1px solid var(--rbg-border,#e6e6ea)", background: "var(--rbg-surface,#fff)", padding: "16px 24px", display: "flex", alignItems: "center", gap: 14, minHeight: 74 }}>
               {showPrimary && (
                 <>
-                  <button onClick={this.runRemoval} disabled={!primaryEnabled} style={primaryStyle}>
+                  <button className="rbg-primary-btn" onClick={this.runRemoval} disabled={!primaryEnabled} style={primaryStyle}>
                     <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M12 3l1.6 4.9L18.5 9.5 13.6 11 12 16l-1.6-5L5.5 9.5l4.9-1.6z"></path>
                     </svg>
@@ -1461,7 +1367,7 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
                   <button
                     className="rbg-dl-btn"
                     onClick={this.downloadCurrent}
-                    style={{ display: "inline-flex", alignItems: "center", gap: 7, height: 44, padding: "0 20px", borderRadius: 11, background: "var(--accent)", color: "#fff", fontSize: 14, fontWeight: 700 }}
+                    style={{ display: "inline-flex", alignItems: "center", gap: 7, height: 44, padding: "0 20px", borderRadius: 11, background: "var(--pdfe-button-bg,var(--accent))", color: "var(--pdfe-button-color,#fff)", fontSize: 14, fontWeight: 700 }}
                   >
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M12 4v11"></path>
@@ -1473,7 +1379,7 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
                   <button
                     className="rbg-save-btn"
                     onClick={this.saveCurrent}
-                    style={{ display: "inline-flex", alignItems: "center", gap: 7, height: 44, padding: "0 18px", borderRadius: 11, border: "1px solid var(--rbg-border,#e2e2e6)", fontSize: 14, fontWeight: 600, color: "var(--rbg-text,#17171a)" }}
+                    style={{ display: "inline-flex", alignItems: "center", gap: 7, height: 44, padding: "0 18px", borderRadius: 11, border: "1px solid var(--pdfe-button-border,var(--rbg-border,#e2e2e6))", fontSize: 14, fontWeight: 600, color: "var(--pdfe-button-color,var(--rbg-text,#17171a))" }}
                   >
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
                       <rect x="5" y="4" width="14" height="16" rx="2"></rect>
@@ -1483,8 +1389,8 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
                   </button>
                   <div style={{ width: 1, height: 26, background: "var(--rbg-border-soft,#ededed)" }}></div>
                   <label style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13, color: "var(--rbg-text-muted,#6b6b72)", cursor: "pointer", userSelect: "none" }}>
-                    <input type="checkbox" checked={s.compareOn} onChange={this.toggleCompare} style={{ accentColor: "var(--accent)", width: 15, height: 15 }} />
-                    원본과 비교
+                    <input disabled={s.processing || s.dragging} type="checkbox" checked={s.compareOn} onChange={this.toggleCompare} style={{ accentColor: "var(--accent)", width: 15, height: 15 }} />
+                    {manual ? "결과 미리보기" : "원본과 비교"}
                   </label>
                 </>
               )}
@@ -1505,12 +1411,12 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
     return (
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
         <div style={{ height: 60, flex: "none", borderBottom: "1px solid var(--rbg-border-soft,#ededed)", display: "flex", alignItems: "center", gap: 12, padding: "0 24px" }}>
-          <span style={{ fontSize: 12, color: "var(--rbg-text-subtle,#a2a2aa)", fontFamily: "'Spline Sans Mono',monospace" }}>{s.saved.length} ITEMS</span>
+          <span style={{ fontSize: 12, color: "var(--rbg-text-subtle,#a2a2aa)", fontFamily: "ui-monospace,SFMono-Regular,Menlo,monospace" }}>{s.saved.length} ITEMS</span>
           <div style={{ flex: 1 }}></div>
           <button
             className="rbg-gallery-new-btn"
             onClick={this.goHome}
-            style={{ display: "inline-flex", alignItems: "center", gap: 6, height: 38, padding: "0 15px", borderRadius: 10, background: "var(--accent)", color: "#fff", fontSize: 13, fontWeight: 700 }}
+            style={{ display: "inline-flex", alignItems: "center", gap: 6, height: 38, padding: "0 15px", borderRadius: 10, background: "var(--pdfe-button-bg,var(--accent))", color: "var(--pdfe-button-color,#fff)", fontSize: 13, fontWeight: 700 }}
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M12 5v14M5 12h14"></path>
@@ -1536,7 +1442,7 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
               }}
             >
               {t.label}
-              <span style={{ opacity: 0.6, marginLeft: 6, fontFamily: "'Spline Sans Mono',monospace", fontSize: 11 }}>{t.count}</span>
+              <span style={{ opacity: 0.6, marginLeft: 6, fontFamily: "ui-monospace,SFMono-Regular,Menlo,monospace", fontSize: 11 }}>{t.count}</span>
             </button>
           ))}
         </div>
@@ -1584,13 +1490,13 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
                         width: 30,
                         height: 30,
                         borderRadius: 9,
-                        background: "rgba(255,255,255,.9)",
+                        background: "var(--pdfe-button-bg,rgba(255,255,255,.9))",
                         backdropFilter: "blur(4px)",
                         display: "flex",
                         alignItems: "center",
                         justifyContent: "center",
                         boxShadow: "0 1px 4px rgba(0,0,0,.1)",
-                        color: it.fav ? "var(--accent)" : "var(--rbg-text-faint,#b0b0b8)",
+                        color: it.fav ? "var(--accent)" : "var(--pdfe-button-color,var(--rbg-text-faint,#b0b0b8))",
                       }}
                     >
                       <svg width="16" height="16" viewBox="0 0 24 24" fill={it.fav ? "var(--accent)" : "none"} stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
@@ -1606,7 +1512,7 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
                           className="rbg-icon-btn"
                           onClick={() => this.reeditItem(it)}
                           title="재편집"
-                          style={{ width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--rbg-text-subtle,#8a8a92)" }}
+                          style={{ width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--pdfe-button-color,var(--rbg-text-subtle,#8a8a92))" }}
                         >
                           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                             <path d="M16.5 4.5l3 3L8 19l-4 1 1-4z"></path>
@@ -1616,7 +1522,7 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
                           className="rbg-icon-btn"
                           onClick={() => this.download(it)}
                           title="다운로드"
-                          style={{ width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--rbg-text-subtle,#8a8a92)" }}
+                          style={{ width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--pdfe-button-color,var(--rbg-text-subtle,#8a8a92))" }}
                         >
                           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
                             <path d="M12 4v11"></path>
@@ -1628,7 +1534,7 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
                           className="rbg-icon-btn-danger"
                           onClick={() => this.deleteItem(it.id)}
                           title="삭제"
-                          style={{ width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--rbg-text-subtle,#8a8a92)" }}
+                          style={{ width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--pdfe-button-color,var(--rbg-text-subtle,#8a8a92))" }}
                         >
                           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                             <path d="M5 7h14M9 7V5h6v2M7 7l1 12h8l1-12"></path>

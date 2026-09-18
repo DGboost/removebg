@@ -34,18 +34,43 @@ export interface Point {
 
 export type Pt = [number, number];
 
-export interface RectSel {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
+
+interface SamTensor {
+  dims: number[];
+  data: Float32Array | Uint8Array | BigInt64Array;
+  dispose(): void;
 }
 
-export interface LassoResult {
-  mask: HTMLCanvasElement;
-  zone: HTMLCanvasElement;
-  op: "new" | "add" | "sub";
-  recognized: boolean;
+interface SamEmbeddings {
+  image_embeddings: SamTensor;
+  image_positional_embeddings: SamTensor;
+}
+
+interface SamImage extends SamEmbeddings {
+  src: string;
+  W: number;
+  H: number;
+  original_sizes: number[][];
+  reshaped_input_sizes: number[][];
+}
+
+interface SamResources {
+  model: {
+    (inputs: SamEmbeddings & { input_points: SamTensor; input_labels: SamTensor }): Promise<{
+      pred_masks: SamTensor;
+      iou_scores: SamTensor;
+    }>;
+    get_image_embeddings(inputs: { pixel_values: SamTensor }): Promise<SamEmbeddings>;
+    dispose(): Promise<void>;
+  };
+  processor: {
+    (image: unknown): Promise<{
+      pixel_values: SamTensor;
+      original_sizes: number[][];
+      reshaped_input_sizes: number[][];
+    }>;
+    post_process_masks(masks: SamTensor, original: number[][], reshaped: number[][]): Promise<SamTensor[]>;
+  };
 }
 
 function ctx2d(c: HTMLCanvasElement, opts?: CanvasRenderingContext2DSettings) {
@@ -57,12 +82,17 @@ function ctx2d(c: HTMLCanvasElement, opts?: CanvasRenderingContext2DSettings) {
 export class RemoveBgEngine {
   private _T: any = null;
   private _tp: Promise<any> | null = null;
-  private _tt: ReturnType<typeof setTimeout> | null = null;
-  private _pipelines: Partial<Record<ModelKey, any>> = {};
+  private _runtimeAttempt = 0;
+  private _pipelines: Partial<Record<ModelKey, Promise<any>>> = {};
+  private _sam: Promise<SamResources> | null = null;
+  private _samImage: SamImage | null = null;
+  private _jobs: Promise<unknown> = Promise.resolve();
+  private _disposed = false;
+  private _disposePromise: Promise<void> | null = null;
+  private _preparation = 0;
 
-  // working state for the lasso/brush tools, set up by prepLasso()
+  // Working state for the brush, set up by prepBrush().
   private _work: { W: number; H: number } | null = null;
-  private _raster: HTMLCanvasElement | null = null;
   private _origRaster: HTMLCanvasElement | null = null;
   private _selCanvas: HTMLCanvasElement | null = null;
   private _selCtx: CanvasRenderingContext2D | null = null;
@@ -75,7 +105,7 @@ export class RemoveBgEngine {
   }
 
   hexToRgb(h: string | undefined): [number, number, number] {
-    let hex = (h || "#3d5afe").replace("#", "");
+    let hex = (h || "#000").replace("#", "");
     if (hex.length === 3) hex = hex.split("").map((c) => c + c).join("");
     const n = parseInt(hex, 16);
     return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
@@ -91,11 +121,11 @@ export class RemoveBgEngine {
     });
   }
 
-  mkCanvas(img: HTMLImageElement) {
+  mkCanvas(img: HTMLImageElement, maxSize = 1200) {
     let W = img.naturalWidth || 480;
     let H = img.naturalHeight || 480;
     const m = Math.max(W, H);
-    const s = m > 1200 ? 1200 / m : 1;
+    const s = m > maxSize ? maxSize / m : 1;
     W = Math.max(1, Math.round(W * s));
     H = Math.max(1, Math.round(H * s));
     const c = document.createElement("canvas");
@@ -135,415 +165,292 @@ export class RemoveBgEngine {
     return c.toDataURL("image/png");
   }
 
-  wandRemove(img: HTMLImageElement, pt: Pt, tol: number) {
-    const { c, x, W, H } = this.mkCanvas(img);
-    const px = Math.max(0, Math.min(W - 1, Math.round(pt[0] * W)));
-    const py = Math.max(0, Math.min(H - 1, Math.round(pt[1] * H)));
-    const d = x.getImageData(px, py, 1, 1).data;
-    this.keyOut(x, W, H, d[0], d[1], d[2], tol + 12);
-    return c.toDataURL("image/png");
+  private assertActive() {
+    if (this._disposed) throw new Error("이미지 엔진이 종료되었습니다.");
   }
 
-  rectKeep(img: HTMLImageElement, sel: RectSel, tol: number) {
-    const { c: src, W, H } = this.mkCanvas(img);
-    const rx = Math.round(sel.x * W);
-    const ry = Math.round(sel.y * H);
-    const rw = Math.max(1, Math.round(sel.w * W));
-    const rh = Math.max(1, Math.round(sel.h * H));
-    const c = document.createElement("canvas");
-    c.width = rw;
-    c.height = rh;
-    const x = ctx2d(c, { willReadFrequently: true });
-    x.drawImage(src, rx, ry, rw, rh, 0, 0, rw, rh);
-    const [r, g, b] = this.corners(x, rw, rh);
-    this.keyOut(x, rw, rh, r, g, b, tol);
-    return c.toDataURL("image/png");
-  }
-
-  // ---------- AI background removal (transformers.js pipeline) ----------
-  private loadT(): Promise<any> {
-    if (this._T) return Promise.resolve(this._T);
-    if ((window as any).__nkT) {
-      this._T = (window as any).__nkT;
-      return Promise.resolve(this._T);
-    }
-    if (this._tp) return this._tp;
-    this._tp = new Promise((res, rej) => {
-      const done = () => {
-        if ((window as any).__nkT) {
-          this._T = (window as any).__nkT;
-          res(this._T);
-        } else rej(new Error("load"));
-      };
-      window.addEventListener("__nkTready", done, { once: true });
-      window.addEventListener("__nkTfail", () => rej(new Error("fail")), { once: true });
-      const s = document.createElement("script");
-      s.type = "module";
-      s.textContent =
-        "import * as T from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.5.1';window.__nkT=T;window.dispatchEvent(new Event('__nkTready'));";
-      s.onerror = () => window.dispatchEvent(new Event("__nkTfail"));
-      document.head.appendChild(s);
-      this._tt = setTimeout(() => window.dispatchEvent(new Event("__nkTfail")), 60000);
+  // All inference and cache eviction share one queue: no tensor can be freed
+  // while a decoder (or a background-removal pipeline) is still using it.
+  private enqueue<T>(job: () => Promise<T>): Promise<T> {
+    const run = this._jobs.then(async () => {
+      this.assertActive();
+      const result = await job();
+      this.assertActive();
+      return result;
     });
+    this._jobs = run.catch(() => undefined);
+    return run;
+  }
+
+  private releaseSamImage() {
+    const image = this._samImage;
+    this._samImage = null;
+    image?.image_embeddings.dispose();
+    image?.image_positional_embeddings.dispose();
+  }
+
+  dispose(): Promise<void> {
+    if (this._disposePromise) return this._disposePromise;
+    this._disposed = true;
+    this.invalidatePreparation();
+    this._disposePromise = this._jobs.then(async () => {
+      this.releaseSamImage();
+      const resources = await Promise.allSettled([
+        ...Object.values(this._pipelines).map(async (pipeline) => (await pipeline).dispose()),
+        ...(this._sam ? [this._sam.then(({ model }) => model.dispose())] : []),
+      ]);
+      this._pipelines = {};
+      this._sam = null;
+      this._T = null;
+      this._tp = null;
+      const failure = resources.find((result) => result.status === "rejected");
+      if (failure?.status === "rejected") throw failure.reason;
+    });
+    return this._disposePromise;
+  }
+
+  private loadT(): Promise<any> {
+    this.assertActive();
+    if (this._T) return Promise.resolve(this._T);
+    if (!this._tp) {
+      const attempt = this._runtimeAttempt++;
+      const url = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.5.1" +
+        (attempt ? `?retry=${attempt}` : "");
+      this._tp = import(/* @vite-ignore */ url).then((T) => {
+        this.assertActive();
+        T.env.allowLocalModels = false;
+        this._T = T;
+        return T;
+      }).catch((error) => {
+        this._tp = null;
+        throw error;
+      });
+    }
     return this._tp;
   }
 
-  // Cache one pipeline per model name so switching models doesn't re-download
-  // the same model if the user switches back.
-  async ensureModel(modelKey: ModelKey, onProgress: (msg: string) => void) {
-    const modelId = MODEL_IDS[modelKey] || MODEL_IDS.BiRefNet_lite;
-    if (this._pipelines[modelKey]) return true;
-    const T = await this.loadT();
-    try {
-      T.env.allowLocalModels = false;
-    } catch {
-      // best effort
-    }
-    const cb = (p: any) => {
-      if (p && p.status === "progress" && p.progress != null) {
-        onProgress("모델 다운로드 " + Math.round(p.progress) + "%");
-      }
-    };
-    const dtype = MODEL_DTYPES[modelKey] || "fp16";
-    const segmenter = await T.pipeline("background-removal", modelId, {
-      dtype,
-      device: "wasm",
-      progress_callback: cb,
-    });
-    this._pipelines[modelKey] = segmenter;
-    return true;
-  }
-
-  async rmbgRemove(src: string, modelKey: ModelKey) {
-    const T = this._T;
-    const segmenter = this._pipelines[modelKey];
-    const el = await this.loadImage(src);
-    const { c: raster, W, H } = this.mkCanvas(el);
-    // The background-removal pipeline returns an array of RawImage results.
-    // Each result already has the background removed (alpha applied).
-    const results = await segmenter(raster.toDataURL("image/png"));
-    const out = results[0];
-    // Robustly convert the result to a dataURL. The pipeline may return a
-    // RawImage (with toCanvas) or a canvas-like object. Handle both.
-    let canvas: any;
-    if (out.toCanvas) {
-      canvas = out.toCanvas();
-    } else if (out instanceof HTMLCanvasElement) {
-      canvas = out;
-    } else {
-      canvas = document.createElement("canvas");
-      canvas.width = out.width || W;
-      canvas.height = out.height || H;
-      const octx = canvas.getContext("2d");
-      const imgData = octx.createImageData(canvas.width, canvas.height);
-      if (out.data) {
-        imgData.data.set(out.data);
-        octx.putImageData(imgData, 0, 0);
-      } else {
-        octx.drawImage(raster, 0, 0);
-      }
-    }
-    if (!canvas.toDataURL) {
-      const tmp = document.createElement("canvas");
-      tmp.width = canvas.width || W;
-      tmp.height = canvas.height || H;
-      tmp.getContext("2d")!.drawImage(canvas, 0, 0);
-      canvas = tmp;
-    }
-    void T;
-    return canvas.toDataURL("image/png") as string;
-  }
-
-  // ---------- smart lasso / brush setup ----------
-  // When a result already exists (from click eraser, auto, or an earlier
-  // lasso pass), use THAT as the working raster — it carries real
-  // transparency from the prior cut, which is exactly what the alpha-based
-  // fast path in refineLassoMask/refineAddMask needs to recognize object
-  // boundaries. Using the original photo (no alpha) here was why magnetic
-  // lasso fell back to the raw drawn shape every time after click eraser.
-  async prepLasso(photo: string, resultSrc: string | null) {
-    try {
-      const rasterSrc = resultSrc || photo;
-      const img = await this.loadImage(rasterSrc);
-      const { c, W, H } = this.mkCanvas(img);
-      this._work = { W, H };
-      this._raster = c;
-      // keep the original photo around too — revealFromOriginal needs it to
-      // recover real pixel colors when adding areas that were previously cut.
-      if (resultSrc) {
-        const origImg = await this.loadImage(photo);
-        const { c: origC } = this.mkCanvas(origImg);
-        this._origRaster = origC;
-      } else {
-        this._origRaster = c;
-      }
-      const sc2 = document.createElement("canvas");
-      sc2.width = W;
-      sc2.height = H;
-      this._selCanvas = sc2;
-      this._selCtx = ctx2d(sc2, { willReadFrequently: true });
-      // touching up a result from another tool (or an earlier lasso stroke)?
-      // seed the selection preview with whatever's already kept, so the
-      // highlight reads as one combined selection immediately, not just
-      // whatever gets drawn from here — it should show the whole current
-      // object, and grow/shrink from there as strokes are added.
-      if (resultSrc) {
-        const cur = await this.loadImage(resultSrc);
-        this._selCtx.drawImage(cur, 0, 0, W, H);
-        return { has: this.hasSelection() };
-      }
-      return { has: false };
-    } catch {
-      this._raster = null;
-      return { has: false };
-    }
-  }
-
-  clearSelection() {
-    if (this._selCtx && this._work) this._selCtx.clearRect(0, 0, this._work.W, this._work.H);
-  }
-
-  // plain filled polygon, exactly what the user drew
-  rawLassoMask(pts: Pt[]) {
-    const { W, H } = this._work!;
-    const c = document.createElement("canvas");
-    c.width = W;
-    c.height = H;
-    const ctx = c.getContext("2d")!;
-    ctx.beginPath();
-    pts.forEach((p, i) => {
-      const X = p[0] * W;
-      const Y = p[1] * H;
-      i ? ctx.lineTo(X, Y) : ctx.moveTo(X, Y);
-    });
-    ctx.closePath();
-    ctx.fillStyle = "#fff";
-    ctx.fill();
-    return c;
-  }
-
-  // the drawn loop is treated as a rough boundary: within it (plus a margin),
-  // sample the surrounding background color and recognize which pixels belong
-  // to the object, then rebuild the selection to hug that object's edges.
-  // Returns { mask, zone }: mask = the recognized object pixels; zone = the
-  // padded bbox that was actually analyzed (so callers can locally replace
-  // just that area without disturbing unrelated parts of the image), and
-  // `recognized` (false when we had to fall back to the literal drawn shape
-  // because there was nothing reliable to compare against).
-  refineLassoMask(pts: Pt[], tol: number) {
-    const { W, H } = this._work!;
-    const rough = this.rawLassoMask(pts);
-    const fallback = { mask: rough, zone: rough, recognized: false };
-    if (!this._raster) return fallback;
-    let bx0 = W,
-      by0 = H,
-      bx1 = 0,
-      by1 = 0;
-    pts.forEach((p) => {
-      const X = p[0] * W,
-        Y = p[1] * H;
-      bx0 = Math.min(bx0, X);
-      by0 = Math.min(by0, Y);
-      bx1 = Math.max(bx1, X);
-      by1 = Math.max(by1, Y);
-    });
-    const loopW = Math.max(1, bx1 - bx0),
-      loopH = Math.max(1, by1 - by0);
-
-    // classify the loop against a ring of margin around it at a given pad
-    // ratio. Returns null (not mask/zone) when that ring isn't a reliable,
-    // contrasting background to compare against — the caller then tries a
-    // wider ring instead of giving up outright.
-    const attempt = (ratio: number) => {
-      const padX = Math.max(8, loopW * ratio),
-        padY = Math.max(8, loopH * ratio);
-      const minX = Math.max(0, Math.floor(bx0 - padX)),
-        minY = Math.max(0, Math.floor(by0 - padY));
-      const maxX = Math.min(W, Math.ceil(bx1 + padX)),
-        maxY = Math.min(H, Math.ceil(by1 + padY));
-      const bw = Math.max(1, Math.round(maxX - minX)),
-        bh = Math.max(1, Math.round(maxY - minY));
-
-      const dil = document.createElement("canvas");
-      dil.width = bw;
-      dil.height = bh;
-      const dctx = dil.getContext("2d")!;
-      dctx.filter = "blur(4px)";
-      dctx.drawImage(rough, minX, minY, bw, bh, 0, 0, bw, bh);
-      dctx.filter = "none";
-      const dilData = dctx.getImageData(0, 0, bw, bh).data;
-
-      const crop = document.createElement("canvas");
-      crop.width = bw;
-      crop.height = bh;
-      const cctx = crop.getContext("2d", { willReadFrequently: true })!;
-      cctx.drawImage(this._raster!, minX, minY, bw, bh, 0, 0, bw, bh);
-      const px = cctx.getImageData(0, 0, bw, bh);
-      const total = bw * bh;
-
-      // when the SOURCE image already carries real transparency here (e.g. the
-      // user pasted in an already-cut-out photo to touch it up further), that
-      // alpha channel already *is* the true object/background boundary —
-      // far more reliable than re-guessing it from color.
-      let lowA = 0,
-        highA = 0;
-      for (let i = 0; i < total; i++) {
-        const a = px.data[i * 4 + 3];
-        if (a < 30) lowA++;
-        else if (a > 220) highA++;
-      }
-      if (lowA > total * 0.03 && highA > total * 0.03 && (lowA + highA) / total > 0.6) {
-        const od0 = cctx.createImageData(bw, bh);
-        for (let i = 0; i < total; i++) {
-          const inZone = dilData[i * 4 + 3] > 40;
-          od0.data[i * 4] = 255;
-          od0.data[i * 4 + 1] = 255;
-          od0.data[i * 4 + 2] = 255;
-          od0.data[i * 4 + 3] = inZone && px.data[i * 4 + 3] > 127 ? 255 : 0;
+  private getSam(onProgress: (msg: string) => void): Promise<SamResources> {
+    if (!this._sam) {
+      this._sam = (async () => {
+        const T = await this.loadT();
+        const modelId = "Xenova/slimsam-77-uniform";
+        const progress_callback = (p: { status: string; progress?: number }) => {
+          if (!this._disposed && p.status === "progress" && p.progress != null) {
+            onProgress("객체 모델 다운로드 " + Math.round(p.progress) + "%");
+          }
+        };
+        const processor = await T.AutoProcessor.from_pretrained(modelId, { progress_callback });
+        this.assertActive();
+        const model = await T.SamModel.from_pretrained(modelId, {
+          dtype: "q8", device: "wasm", progress_callback,
+        });
+        if (this._disposed) {
+          await model.dispose();
+          this.assertActive();
         }
-        const tmp0 = document.createElement("canvas");
-        tmp0.width = bw;
-        tmp0.height = bh;
-        tmp0.getContext("2d")!.putImageData(od0, 0, 0);
-        const out0 = document.createElement("canvas");
-        out0.width = W;
-        out0.height = H;
-        out0.getContext("2d")!.drawImage(tmp0, minX, minY);
-        const zone0 = document.createElement("canvas");
-        zone0.width = W;
-        zone0.height = H;
-        const zctx0 = zone0.getContext("2d")!;
-        zctx0.fillStyle = "#fff";
-        zctx0.fillRect(minX, minY, bw, bh);
-        return { mask: out0, zone: zone0, recognized: true };
-      }
-
-      // background estimate = a ROBUST average color of the margin (inside the
-      // crop, outside the dilated loop) — the area the user framed as
-      // "background" by leaving room around the object. Start from the full
-      // average, then repeatedly drop the farthest-off fraction of samples and
-      // re-average the rest — converges on the majority background tone and
-      // discards a minority contaminating patch near the edge.
-      const marginIdx: number[] = [];
-      for (let i = 0; i < bw * bh; i++) {
-        if (dilData[i * 4 + 3] <= 40) marginIdx.push(i);
-      }
-      if (marginIdx.length < Math.max(20, bw * bh * 0.02)) return null;
-
-      const stepN = Math.max(1, Math.floor(marginIdx.length / 600));
-      const samples: [number, number, number][] = [];
-      for (let k = 0; k < marginIdx.length; k += stepN) {
-        const i = marginIdx[k];
-        samples.push([px.data[i * 4], px.data[i * 4 + 1], px.data[i * 4 + 2]]);
-      }
-      let br = 0,
-        bg = 0,
-        bb = 0;
-      for (const s of samples) {
-        br += s[0];
-        bg += s[1];
-        bb += s[2];
-      }
-      br /= samples.length;
-      bg /= samples.length;
-      bb /= samples.length;
-      let pool = samples;
-      for (let iter = 0; iter < 3; iter++) {
-        const ranked = pool
-          .map((s) => ({ s, d: (s[0] - br) ** 2 + (s[1] - bg) ** 2 + (s[2] - bb) ** 2 }))
-          .sort((a, b) => a.d - b.d);
-        const keepN = Math.max(8, Math.floor(ranked.length * 0.65));
-        pool = ranked.slice(0, keepN).map((w) => w.s);
-        br = 0;
-        bg = 0;
-        bb = 0;
-        for (const s of pool) {
-          br += s[0];
-          bg += s[1];
-          bb += s[2];
-        }
-        br /= pool.length;
-        bg /= pool.length;
-        bb /= pool.length;
-      }
-
-      // reliability check: is the margin actually mostly a consistent
-      // background tone once that trimming is applied? Deliberately loose —
-      // real photos have soft gradients, grain and JPEG noise even across a
-      // plain backdrop; this only needs to rule out a margin that landed on
-      // genuinely different material.
-      let close = 0;
-      for (const i of marginIdx) {
-        const rr = px.data[i * 4],
-          gg = px.data[i * 4 + 1],
-          bv = px.data[i * 4 + 2];
-        if (Math.sqrt((rr - br) ** 2 + (gg - bg) ** 2 + (bv - bb) ** 2) < 55) close++;
-      }
-      if (close / marginIdx.length < 0.45) return null;
-
-      // second guard: a flat, evenly-lit patch of the object itself can look
-      // just as "uniform" as real background. The margin only means something
-      // if it actually contrasts with what's inside the loop.
-      let ir = 0,
-        ig = 0,
-        ib = 0,
-        iN = 0;
-      for (let i = 0; i < bw * bh; i++) {
-        if (dilData[i * 4 + 3] <= 40) continue;
-        ir += px.data[i * 4];
-        ig += px.data[i * 4 + 1];
-        ib += px.data[i * 4 + 2];
-        iN++;
-      }
-      if (iN > 0) {
-        ir /= iN;
-        ig /= iN;
-        ib /= iN;
-        const contrast = Math.sqrt((ir - br) ** 2 + (ig - bg) ** 2 + (ib - bb) ** 2);
-        if (contrast < 18) return null;
-      }
-
-      const od = cctx.createImageData(bw, bh);
-      for (let i = 0; i < bw * bh; i++) {
-        const rr = px.data[i * 4],
-          gg = px.data[i * 4 + 1],
-          bv = px.data[i * 4 + 2];
-        const dist = Math.sqrt((rr - br) ** 2 + (gg - bg) ** 2 + (bv - bb) ** 2);
-        const inZone = dilData[i * 4 + 3] > 40;
-        od.data[i * 4] = 255;
-        od.data[i * 4 + 1] = 255;
-        od.data[i * 4 + 2] = 255;
-        od.data[i * 4 + 3] = inZone && dist > tol ? 255 : 0;
-      }
-      const tmp = document.createElement("canvas");
-      tmp.width = bw;
-      tmp.height = bh;
-      tmp.getContext("2d")!.putImageData(od, 0, 0);
-
-      const out = document.createElement("canvas");
-      out.width = W;
-      out.height = H;
-      out.getContext("2d")!.drawImage(tmp, minX, minY);
-
-      const zone = document.createElement("canvas");
-      zone.width = W;
-      zone.height = H;
-      const zctx = zone.getContext("2d")!;
-      zctx.fillStyle = "#fff";
-      zctx.fillRect(minX, minY, bw, bh);
-      return { mask: out, zone, recognized: true };
-    };
-
-    // a big 'new' loop drawn around a whole object carries generous background
-    // margin at even a tight ratio, so it succeeds on the first, tightest ring.
-    // small +/- touch-up strokes frame far less background per pixel of margin
-    // at that same tight ratio — widen the ring a few times so those strokes
-    // get a real chance to reach the actual edge too.
-    for (const ratio of [0.08, 0.25, 0.55, 1.1]) {
-      const r = attempt(ratio);
-      if (r) return r;
+        return { model, processor };
+      })().catch((error) => {
+        this._sam = null;
+        throw error;
+      });
     }
-    return fallback;
+    return this._sam;
+  }
+
+  private async samImage(src: string, resources: SamResources): Promise<SamImage> {
+    if (this._samImage?.src === src) return this._samImage;
+    this.releaseSamImage();
+    const { c, W, H } = this.mkCanvas(await this.loadImage(src));
+    this.assertActive();
+    const inputs = await resources.processor(this._T.RawImage.fromCanvas(c));
+    try {
+      this.assertActive();
+      const embeddings = await resources.model.get_image_embeddings(inputs);
+      if (this._disposed) {
+        embeddings.image_embeddings.dispose();
+        embeddings.image_positional_embeddings.dispose();
+        this.assertActive();
+      }
+      this._samImage = {
+        src, W, H, ...embeddings,
+        original_sizes: inputs.original_sizes,
+        reshaped_input_sizes: inputs.reshaped_input_sizes,
+      };
+      return this._samImage;
+    } finally {
+      inputs.pixel_values.dispose();
+    }
+  }
+
+  private async recognize(
+    image: SamImage, resources: SamResources, point: Pt,
+  ): Promise<HTMLCanvasElement> {
+    const { W, H } = image;
+    const [resizedH, resizedW] = image.reshaped_input_sizes[0];
+    // Tensor coordinates are x,y; processor size metadata is height,width.
+    const coordinates = new Float32Array([point[0] * resizedW / W, point[1] * resizedH / H]);
+    const input_points: SamTensor = new this._T.Tensor("float32", coordinates, [1, 1, 1, 2]);
+    const input_labels: SamTensor = new this._T.Tensor("int64", new BigInt64Array([1n]), [1, 1, 1]);
+    let outputs: Awaited<ReturnType<SamResources["model"]>> | undefined;
+    let masks: SamTensor[] = [];
+    try {
+      outputs = await resources.model({
+        image_embeddings: image.image_embeddings,
+        image_positional_embeddings: image.image_positional_embeddings,
+        input_points, input_labels,
+      });
+      masks = await resources.processor.post_process_masks(
+        outputs.pred_masks, image.original_sizes, image.reshaped_input_sizes,
+      );
+      this.assertActive();
+      const mask = masks[0];
+      const scores = outputs.iou_scores;
+      const pixels = W * H;
+      if (!mask || mask.dims.length !== 4 || mask.dims[0] !== 1 ||
+          mask.dims[2] !== H || mask.dims[3] !== W ||
+          scores.dims.length !== 3 || scores.dims[0] !== 1 ||
+          scores.dims[1] !== 1 || scores.dims[2] !== mask.dims[1] ||
+          scores.data.length !== mask.dims[1] ||
+          mask.data.length !== scores.data.length * pixels) {
+        throw new Error("객체 모델이 올바른 마스크를 반환하지 않았습니다.");
+      }
+      let selected = -1;
+      let best = -Infinity;
+      for (let candidate = 0; candidate < scores.data.length; candidate++) {
+        const score = Number(scores.data[candidate]);
+        const offset = candidate * pixels;
+        if (!Number.isFinite(score) || score < 0.88 ||
+            !mask.data[offset + Math.floor(point[1]) * W + Math.floor(point[0])]) continue;
+        if (score > best) {
+          best = score;
+          selected = candidate;
+        }
+      }
+      if (selected < 0) throw new Error("신뢰할 수 있는 객체를 찾지 못했습니다. 객체 안의 다른 지점을 클릭해 주세요.");
+      const c = document.createElement("canvas");
+      c.width = W;
+      c.height = H;
+      const x = ctx2d(c);
+      const data = x.createImageData(W, H);
+      for (let i = 0; i < pixels; i++) {
+        data.data[i * 4] = data.data[i * 4 + 1] = data.data[i * 4 + 2] = 255;
+        data.data[i * 4 + 3] = mask.data[selected * pixels + i] ? 255 : 0;
+      }
+      x.putImageData(data, 0, 0);
+      return c;
+    } finally {
+      input_points.dispose();
+      input_labels.dispose();
+      for (const mask of masks) mask.dispose();
+      outputs?.pred_masks.dispose();
+      outputs?.iou_scores.dispose();
+    }
+  }
+
+  clickKeep(src: string, pt: Pt, onProgress: (msg: string) => void): Promise<string> {
+    return this.enqueue(async () => {
+      onProgress("클릭 객체 모델 준비 중…");
+      const resources = await this.getSam(onProgress);
+      const image = await this.samImage(src, resources);
+      const point: Pt = [
+        Math.max(0, Math.min(image.W - 1, Math.floor(pt[0] * image.W))),
+        Math.max(0, Math.min(image.H - 1, Math.floor(pt[1] * image.H))),
+      ];
+      onProgress("클릭한 객체 인식 중…");
+      const mask = await this.recognize(image, resources, point);
+      const { c } = this.mkCanvas(await this.loadImage(src), Infinity);
+      return this.composite(c, c, mask, "new");
+    });
+  }
+
+  // Cache in-flight initialization as well as ready pipelines.
+  private getPipeline(modelKey: ModelKey, onProgress: (msg: string) => void): Promise<any> {
+    if (!this._pipelines[modelKey]) {
+      this._pipelines[modelKey] = (async () => {
+        const T = await this.loadT();
+        const pipeline = await T.pipeline("background-removal", MODEL_IDS[modelKey], {
+          dtype: MODEL_DTYPES[modelKey], device: "wasm",
+          progress_callback: (p: { status: string; progress?: number }) => {
+            if (!this._disposed && p.status === "progress" && p.progress != null) {
+              onProgress("모델 다운로드 " + Math.round(p.progress) + "%");
+            }
+          },
+        });
+        if (this._disposed) {
+          await pipeline.dispose();
+          this.assertActive();
+        }
+        return pipeline;
+      })().catch((error) => {
+        delete this._pipelines[modelKey];
+        throw error;
+      });
+    }
+    return this._pipelines[modelKey]!;
+  }
+
+  ensureModel(modelKey: ModelKey, onProgress: (msg: string) => void) {
+    return this.enqueue(async () => {
+      await this.getPipeline(modelKey, onProgress);
+      return true;
+    });
+  }
+
+  rmbgRemove(photo: string, modelKey: ModelKey, currentSrc: string | null = null): Promise<string> {
+    return this.enqueue(async () => {
+      const segmenter = await this.getPipeline(modelKey, () => undefined);
+      const original = await this.loadImage(photo);
+      const { c: raster } = this.mkCanvas(original);
+      const results = await segmenter(raster.toDataURL("image/png"));
+      const out = results?.[0];
+      if (!out || out.channels !== 4 || !Number.isInteger(out.width) || !Number.isInteger(out.height) ||
+          out.width <= 0 || out.height <= 0 || out.width !== raster.width || out.height !== raster.height ||
+          !(out.data instanceof Uint8Array || out.data instanceof Uint8ClampedArray) ||
+          out.data.length !== out.width * out.height * 4 || typeof out.toCanvas !== "function") {
+        throw new Error("배경 제거 모델이 올바른 RGBA 이미지를 반환하지 않았습니다.");
+      }
+      const { c, x, W, H } = this.mkCanvas(original, Infinity);
+      const result = x.getImageData(0, 0, W, H);
+      const predicted = this.scaledPixels(out.toCanvas(), W, H);
+      const current = currentSrc ? this.scaledPixels(await this.loadImage(currentSrc), W, H) : result.data;
+      for (let i = 3; i < result.data.length; i += 4) {
+        result.data[i] = Math.min(result.data[i], current[i], predicted[i]);
+      }
+      x.putImageData(result, 0, 0);
+      return c.toDataURL("image/png");
+    });
+  }
+
+  invalidatePreparation() {
+    this._preparation++;
+    this._work = null;
+    this._origRaster = null;
+    this._selCanvas = null;
+    this._selCtx = null;
+  }
+
+  async prepBrush(photo: string, resultSrc: string | null): Promise<void> {
+    this.assertActive();
+    this.invalidatePreparation();
+    const generation = this._preparation;
+    const [original, current] = await Promise.all([
+      this.loadImage(photo), resultSrc ? this.loadImage(resultSrc) : Promise.resolve(null),
+    ]);
+    this.assertActive();
+    if (generation !== this._preparation) throw new Error("이전 이미지 준비가 취소되었습니다.");
+    const { c: originalRaster } = this.mkCanvas(original, Infinity);
+    const scale = Math.min(1, 1200 / Math.max(originalRaster.width, originalRaster.height));
+    const W = Math.max(1, Math.round(originalRaster.width * scale));
+    const H = Math.max(1, Math.round(originalRaster.height * scale));
+    const selection = document.createElement("canvas");
+    selection.width = W;
+    selection.height = H;
+    const selectionCtx = ctx2d(selection, { willReadFrequently: true });
+    if (current) selectionCtx.drawImage(current, 0, 0, W, H);
+    this._origRaster = originalRaster;
+    this._work = { W, H };
+    this._selCanvas = selection;
+    this._selCtx = selectionCtx;
   }
 
   buildSelOverlay(accent: string | undefined) {
@@ -575,14 +482,6 @@ export class RemoveBgEngine {
     return { url: o.toDataURL(), has };
   }
 
-  // cheap "is anything selected?" check (no toDataURL) for gating UI.
-  hasSelection(): boolean {
-    if (!this._work || !this._selCtx) return false;
-    const { W, H } = this._work;
-    const d = this._selCtx.getImageData(0, 0, W, H).data;
-    for (let i = 3; i < d.length; i += 4) if (d[i] > 12) return true;
-    return false;
-  }
 
   // Render the current selection (_selCanvas, white-alpha) into a visible DOM
   // overlay canvas, tinted to the accent color. This is deliberately cheap —
@@ -606,390 +505,43 @@ export class RemoveBgEngine {
     x.globalCompositeOperation = "source-over";
   }
 
-  // ---- shared local object/background segmentation for add & exclude ----
-  // Within the drawn loop (plus a surrounding margin) label every pixel as
-  // object or background, so a stroke can add the object side or erase the
-  // background side while snapping to the real edge. Two independent signals
-  // drive this, and crucially NEITHER is the loop-interior alpha (that's the
-  // very thing being corrected, so it can't be trusted inside the loop):
-  //   • COLOUR comes from the ORIGINAL photo (_origRaster) — reliable
-  //     everywhere, including where the result raster blanked removed pixels.
-  //   • The current cut's ALPHA (_raster), sampled only in the MARGIN outside
-  //     the loop, tells us which nearby colours are known-object (opaque) vs
-  //     known-background (transparent). Those seed two colour models; every
-  //     in-loop pixel is then assigned to whichever model it's closer to.
-  // Returns null when there's nothing reliable to compare against (caller then
-  // falls back to the literal drawn shape so a stroke is never wasted).
-  private segmentLoop(pts: Pt[], padRatio: number, tol: number) {
-    const { W, H } = this._work!;
-    if (!this._raster) return null;
-    const colorSrc = this._origRaster || this._raster;
-    let bx0 = W,
-      by0 = H,
-      bx1 = 0,
-      by1 = 0;
-    pts.forEach((p) => {
-      const X = p[0] * W,
-        Y = p[1] * H;
-      bx0 = Math.min(bx0, X);
-      by0 = Math.min(by0, Y);
-      bx1 = Math.max(bx1, X);
-      by1 = Math.max(by1, Y);
-    });
-    const loopW = Math.max(1, bx1 - bx0),
-      loopH = Math.max(1, by1 - by0);
-    const padX = Math.max(12, loopW * padRatio),
-      padY = Math.max(12, loopH * padRatio);
-    const minX = Math.max(0, Math.floor(bx0 - padX)),
-      minY = Math.max(0, Math.floor(by0 - padY));
-    const maxX = Math.min(W, Math.ceil(bx1 + padX)),
-      maxY = Math.min(H, Math.ceil(by1 + padY));
-    const bw = Math.max(1, Math.round(maxX - minX)),
-      bh = Math.max(1, Math.round(maxY - minY));
-    const total = bw * bh;
-
-    const rawC = document.createElement("canvas");
-    rawC.width = bw;
-    rawC.height = bh;
-    const rctx = rawC.getContext("2d", { willReadFrequently: true })!;
-    rctx.beginPath();
-    pts.forEach((p, i) => {
-      const X = p[0] * W - minX,
-        Y = p[1] * H - minY;
-      i ? rctx.lineTo(X, Y) : rctx.moveTo(X, Y);
-    });
-    rctx.closePath();
-    rctx.fillStyle = "#fff";
-    rctx.fill();
-    const inA = rctx.getImageData(0, 0, bw, bh).data;
-    const inLoop = new Uint8Array(total);
-    for (let i = 0; i < total; i++) inLoop[i] = inA[i * 4 + 3] > 40 ? 1 : 0;
-
-    const colC = document.createElement("canvas");
-    colC.width = bw;
-    colC.height = bh;
-    const colCtx = colC.getContext("2d", { willReadFrequently: true })!;
-    colCtx.drawImage(colorSrc, minX, minY, bw, bh, 0, 0, bw, bh);
-    const col = colCtx.getImageData(0, 0, bw, bh).data;
-    const alC = document.createElement("canvas");
-    alC.width = bw;
-    alC.height = bh;
-    const alCtx = alC.getContext("2d", { willReadFrequently: true })!;
-    alCtx.drawImage(this._raster, minX, minY, bw, bh, 0, 0, bw, bh);
-    const al = alCtx.getImageData(0, 0, bw, bh).data;
-
-    let lowA = 0,
-      highA = 0;
-    for (let i = 0; i < total; i++) {
-      const a = al[i * 4 + 3];
-      if (a < 40) lowA++;
-      else if (a > 200) highA++;
-    }
-    const hasAlpha = lowA > total * 0.02 && highA > total * 0.02;
-
-    // robust trimmed-average colour over a set of pixel indices
-    const trimmedAvg = (idx: number[]): [number, number, number] | null => {
-      if (idx.length < 8) return null;
-      const step = Math.max(1, Math.floor(idx.length / 800));
-      const s: [number, number, number][] = [];
-      for (let k = 0; k < idx.length; k += step) {
-        const i = idx[k];
-        s.push([col[i * 4], col[i * 4 + 1], col[i * 4 + 2]]);
-      }
-      let r = 0,
-        g = 0,
-        b = 0;
-      for (const v of s) {
-        r += v[0];
-        g += v[1];
-        b += v[2];
-      }
-      r /= s.length;
-      g /= s.length;
-      b /= s.length;
-      let pool = s;
-      for (let it = 0; it < 3; it++) {
-        const rk = pool
-          .map((v) => ({ v, d: (v[0] - r) ** 2 + (v[1] - g) ** 2 + (v[2] - b) ** 2 }))
-          .sort((a, b2) => a.d - b2.d);
-        pool = rk.slice(0, Math.max(6, Math.floor(rk.length * 0.7))).map((w) => w.v);
-        r = 0;
-        g = 0;
-        b = 0;
-        for (const v of pool) {
-          r += v[0];
-          g += v[1];
-          b += v[2];
-        }
-        r /= pool.length;
-        g /= pool.length;
-        b /= pool.length;
-      }
-      return [r, g, b];
-    };
-
-    // seed colour models from the MARGIN only (outside the loop), where the
-    // current alpha can still be trusted: transparent -> background sample,
-    // opaque -> object sample. With no alpha here, the whole margin is treated
-    // as background (the user framed it by leaving room around the object).
-    const bgIdx: number[] = [],
-      fgIdx: number[] = [];
-    for (let i = 0; i < total; i++) {
-      if (inLoop[i]) continue;
-      if (!hasAlpha) {
-        bgIdx.push(i);
-        continue;
-      }
-      const a = al[i * 4 + 3];
-      if (a < 40) bgIdx.push(i);
-      else if (a > 200) fgIdx.push(i);
-    }
-    const need = Math.max(20, total * 0.01);
-    const bg = bgIdx.length >= need ? trimmedAvg(bgIdx) : null;
-    const fg = hasAlpha && fgIdx.length >= need ? trimmedAvg(fgIdx) : null;
-    if (!bg && !fg) return null;
-
-    const t = Math.max(tol, 40); // floor so the tight default tol still admits noise/AA
-    const isObj = new Uint8Array(total);
-    for (let i = 0; i < total; i++) {
-      const r = col[i * 4],
-        g = col[i * 4 + 1],
-        b = col[i * 4 + 2];
-      const dB = bg ? Math.sqrt((r - bg[0]) ** 2 + (g - bg[1]) ** 2 + (b - bg[2]) ** 2) : Infinity;
-      const dF = fg ? Math.sqrt((r - fg[0]) ** 2 + (g - fg[1]) ** 2 + (b - fg[2]) ** 2) : Infinity;
-      let obj: boolean;
-      if (fg && bg) obj = dF <= dB;
-      else if (bg) obj = dB > t;
-      else obj = dF <= t;
-      isObj[i] = obj ? 1 : 0;
-    }
-
-    let reliable = true;
-    if (fg && bg) {
-      const c = Math.sqrt((fg[0] - bg[0]) ** 2 + (fg[1] - bg[1]) ** 2 + (fg[2] - bg[2]) ** 2);
-      if (c < 20) reliable = false;
-    } else if (bg) {
-      let io = 0,
-        iN = 0;
-      for (let i = 0; i < total; i++) {
-        if (!inLoop[i]) continue;
-        iN++;
-        if (isObj[i]) io++;
-      }
-      if (iN > 0 && io / iN < 0.05) reliable = false;
-    }
-
-    return { minX, minY, bw, bh, inLoop, isObj, reliable };
+  private scaledPixels(source: CanvasImageSource, W: number, H: number, mask = false) {
+    const c = document.createElement("canvas");
+    c.width = W;
+    c.height = H;
+    const x = ctx2d(c);
+    // Keep the brush mask's bounded-work footprint. Image/prediction alpha
+    // uses interpolation.
+    x.imageSmoothingEnabled = !mask;
+    x.drawImage(source, 0, 0, W, H);
+    return x.getImageData(0, 0, W, H).data;
   }
 
-  // paint a crop-sized on/off mask onto a full WxH white mask canvas.
-  private paintMask(minX: number, minY: number, bw: number, bh: number, on: Uint8Array) {
-    const tmp = document.createElement("canvas");
-    tmp.width = bw;
-    tmp.height = bh;
-    const tctx = tmp.getContext("2d")!;
-    const od = tctx.createImageData(bw, bh);
-    for (let i = 0; i < bw * bh; i++) {
-      od.data[i * 4] = 255;
-      od.data[i * 4 + 1] = 255;
-      od.data[i * 4 + 2] = 255;
-      od.data[i * 4 + 3] = on[i] ? 255 : 0;
+  private composite(
+    original: HTMLCanvasElement, base: CanvasImageSource,
+    mask: HTMLCanvasElement, op: "new" | "add" | "sub",
+  ): string {
+    const W = original.width, H = original.height;
+    const c = document.createElement("canvas");
+    c.width = W;
+    c.height = H;
+    const x = ctx2d(c);
+    x.drawImage(original, 0, 0);
+    const output = x.getImageData(0, 0, W, H);
+    const current = op === "new" ? output.data : this.scaledPixels(base, W, H);
+    const coverage = this.scaledPixels(mask, W, H, true);
+    for (let i = 3; i < output.data.length; i += 4) {
+      const originalAlpha = output.data[i];
+      const currentAlpha = Math.min(originalAlpha, current[i]);
+      const m = coverage[i] / 255;
+      let alpha: number;
+      if (op === "sub") alpha = currentAlpha * (1 - m);
+      else if (op === "add") alpha = Math.max(currentAlpha, originalAlpha * m);
+      else alpha = originalAlpha * m;
+      output.data[i] = Math.min(originalAlpha, Math.round(alpha));
     }
-    tctx.putImageData(od, 0, 0);
-    const { W, H } = this._work!;
-    const out = document.createElement("canvas");
-    out.width = W;
-    out.height = H;
-    out.getContext("2d")!.drawImage(tmp, minX, minY);
-    return out;
-  }
-
-  // ADD: the user circled a region to bring BACK into the object. Object =
-  // classified object (segmentLoop) OR a background-coloured pocket that's
-  // walled off from the outside by object (e.g. a light belly enclosed by a
-  // darker body) — found by flood-filling background inward from the crop
-  // border and keeping whatever it can't reach.
-  refineAddMask(pts: Pt[], magnetic: boolean, tol: number) {
-    const raw = this.rawLassoMask(pts);
-    if (!this._raster || !magnetic) return { mask: raw, recognized: false };
-    for (const ratio of [0.18, 0.4, 0.85]) {
-      const S = this.segmentLoop(pts, ratio, tol);
-      if (!S || !S.reliable) continue;
-      const { minX, minY, bw, bh, inLoop, isObj } = S;
-      const total = bw * bh;
-      const reach = new Uint8Array(total);
-      const stack: number[] = [];
-      const seed = (i: number) => {
-        if (!isObj[i] && !reach[i]) {
-          reach[i] = 1;
-          stack.push(i);
-        }
-      };
-      for (let x = 0; x < bw; x++) {
-        seed(x);
-        seed((bh - 1) * bw + x);
-      }
-      for (let y = 0; y < bh; y++) {
-        seed(y * bw);
-        seed(y * bw + bw - 1);
-      }
-      while (stack.length) {
-        const i = stack.pop()!,
-          x = i % bw,
-          y = (i / bw) | 0;
-        if (x > 0) seed(i - 1);
-        if (x < bw - 1) seed(i + 1);
-        if (y > 0) seed(i - bw);
-        if (y < bh - 1) seed(i + bw);
-      }
-      const on = new Uint8Array(total);
-      let kept = 0,
-        loopN = 0;
-      for (let i = 0; i < total; i++) {
-        if (!inLoop[i]) continue;
-        loopN++;
-        if (isObj[i] || !reach[i]) {
-          on[i] = 1;
-          kept++;
-        }
-      }
-      if (loopN > 0 && kept / loopN < 0.12) continue; // added almost nothing: widen, then fall back
-      return { mask: this.paintMask(minX, minY, bw, bh, on), recognized: true };
-    }
-    return { mask: raw, recognized: false };
-  }
-
-  // EXCLUDE: the user circled a region to trim. Erase the background side
-  // inside the loop, keeping object pixels intact. If the loop is essentially
-  // all object there's no background sliver to clean — erase the drawn shape
-  // as-is (the user means "remove this whole chunk").
-  refineSubMask(pts: Pt[], magnetic: boolean, tol: number) {
-    const raw = this.rawLassoMask(pts);
-    if (!this._raster || !magnetic) return { mask: raw, recognized: false };
-    for (const ratio of [0.18, 0.4, 0.85]) {
-      const S = this.segmentLoop(pts, ratio, tol);
-      if (!S || !S.reliable) continue;
-      const { minX, minY, bw, bh, inLoop, isObj } = S;
-      const total = bw * bh;
-      const on = new Uint8Array(total);
-      let erase = 0,
-        loopN = 0;
-      for (let i = 0; i < total; i++) {
-        if (!inLoop[i]) continue;
-        loopN++;
-        if (!isObj[i]) {
-          on[i] = 1;
-          erase++;
-        }
-      }
-      if (loopN > 0 && erase / loopN < 0.12) continue;
-      return { mask: this.paintMask(minX, minY, bw, bh, on), recognized: true };
-    }
-    return { mask: raw, recognized: false };
-  }
-
-  drawLassoStroke(mask: HTMLCanvasElement, op: "new" | "add" | "sub") {
-    const ctx = this._selCtx!;
-    if (op === "sub") {
-      ctx.globalCompositeOperation = "destination-out";
-      ctx.drawImage(mask, 0, 0);
-      ctx.globalCompositeOperation = "source-over";
-    } else {
-      ctx.globalCompositeOperation = "source-over";
-      ctx.drawImage(mask, 0, 0);
-    }
-  }
-
-  async lassoApplyRun(
-    baseSrc: string,
-    mask: HTMLCanvasElement,
-    zone: HTMLCanvasElement,
-    op: "new" | "add" | "sub",
-    hadPriorResult: boolean,
-  ) {
-    const baseImg = await this.loadImage(baseSrc);
-    const { c, x, W, H } = this.mkCanvas(baseImg);
-    const revealFromOriginal = async () => {
-      // _origRaster is always the original photo (set in prepLasso), even when
-      // _raster is the current result with transparency.
-      const oc = this._origRaster || this._raster;
-      if (!oc) return;
-      const reveal = document.createElement("canvas");
-      reveal.width = W;
-      reveal.height = H;
-      const rctx = reveal.getContext("2d")!;
-      rctx.drawImage(oc, 0, 0, W, H);
-      rctx.globalCompositeOperation = "destination-in";
-      rctx.drawImage(mask, 0, 0, W, H);
-      x.drawImage(reveal, 0, 0);
-      // the ORIGINAL photo can have no real data here either (e.g. an
-      // already-imperfect web cutout) — close whatever's still missing with
-      // its nearest surrounding color instead of leaving a permanent hole.
-      this.inpaintRemainingHoles(x, W, H, mask);
-    };
-    if (op === "sub") {
-      x.globalCompositeOperation = "destination-out";
-      x.drawImage(mask, 0, 0, W, H);
-      x.globalCompositeOperation = "source-over";
-    } else if (op === "new" && !hadPriorResult) {
-      x.globalCompositeOperation = "destination-in";
-      x.drawImage(mask, 0, 0, W, H);
-      x.globalCompositeOperation = "source-over";
-    } else if (op === "new") {
-      x.globalCompositeOperation = "destination-out";
-      x.drawImage(zone, 0, 0, W, H);
-      x.globalCompositeOperation = "source-over";
-      await revealFromOriginal();
-    } else {
-      await revealFromOriginal();
-    }
+    x.putImageData(output, 0, 0);
     return c.toDataURL("image/png");
-  }
-
-  // last-resort fill for pixels the mask says should now be visible but that
-  // are STILL transparent after revealing from the original (i.e. the
-  // original had nothing there either) — grows the nearest opaque color
-  // inward, ring by ring, until the gap is closed. Cheap stand-in for
-  // inpainting; skipped for anything larger than a small touch-up area.
-  private inpaintRemainingHoles(ctx: CanvasRenderingContext2D, W: number, H: number, maskCanvas: HTMLCanvasElement) {
-    const maskData = maskCanvas.getContext("2d")!.getImageData(0, 0, W, H).data;
-    const id = ctx.getImageData(0, 0, W, H);
-    const data = id.data;
-    let remaining: number[] = [];
-    for (let i = 0; i < W * H; i++) {
-      if (maskData[i * 4 + 3] > 40 && data[i * 4 + 3] < 40) remaining.push(i);
-    }
-    if (!remaining.length || remaining.length > 60000) return false;
-    const dirs = [-1, 1, -W, W, -W - 1, -W + 1, W - 1, W + 1];
-    for (let pass = 0; pass < 400 && remaining.length; pass++) {
-      const next: number[] = [];
-      let progressed = false;
-      for (const i of remaining) {
-        if (data[i * 4 + 3] >= 40) continue;
-        const x2 = i % W;
-        let found = -1;
-        for (const d of dirs) {
-          const j = i + d;
-          if (j < 0 || j >= W * H) continue;
-          if (Math.abs((j % W) - x2) > 1) continue;
-          if (data[j * 4 + 3] >= 200) {
-            found = j;
-            break;
-          }
-        }
-        if (found >= 0) {
-          data[i * 4] = data[found * 4];
-          data[i * 4 + 1] = data[found * 4 + 1];
-          data[i * 4 + 2] = data[found * 4 + 2];
-          data[i * 4 + 3] = 255;
-          progressed = true;
-        } else next.push(i);
-      }
-      remaining = next;
-      if (!progressed) break;
-    }
-    ctx.putImageData(id, 0, 0);
-    return true;
   }
 
   // ---------- brush ----------
@@ -1053,27 +605,15 @@ export class RemoveBgEngine {
     this._selCtx.globalCompositeOperation = "source-over";
   }
 
-  // Apply brush stroke: add reveals object from original, sub erases.
+  // Apply brush stroke at original resolution; brush diameter remains in work pixels.
   async brushApplyRun(baseSrc: string, mask: HTMLCanvasElement, op: "add" | "sub") {
-    const { c, x, W, H } = this.mkCanvas(await this.loadImage(baseSrc));
-    if (op === "sub") {
-      x.globalCompositeOperation = "destination-out";
-      x.drawImage(mask, 0, 0, W, H);
-      x.globalCompositeOperation = "source-over";
-    } else {
-      const oc = this._origRaster || this._raster;
-      if (oc) {
-        const reveal = document.createElement("canvas");
-        reveal.width = W;
-        reveal.height = H;
-        const rctx = reveal.getContext("2d")!;
-        rctx.drawImage(oc, 0, 0, W, H);
-        rctx.globalCompositeOperation = "destination-in";
-        rctx.drawImage(mask, 0, 0, W, H);
-        x.drawImage(reveal, 0, 0);
-        this.inpaintRemainingHoles(x, W, H, mask);
-      }
-    }
-    return c.toDataURL("image/png");
+    this.assertActive();
+    const original = this._origRaster;
+    const generation = this._preparation;
+    if (!original) throw new Error("이미지를 먼저 준비하세요.");
+    const base = await this.loadImage(baseSrc);
+    this.assertActive();
+    if (generation !== this._preparation) throw new Error("이미지가 변경되어 편집을 취소했습니다.");
+    return this.composite(original, base, mask, op);
   }
 }

@@ -35,12 +35,10 @@ export interface RemoveBgStorage {
 }
 
 export interface RemoveBgToolProps {
-  /** Brand accent color, e.g. "#3d5afe". */
+  /** Brand accent color, e.g. "#000". */
   accent?: string;
   /** Display name shown in the top-left brand mark's tooltip. */
   appName?: string;
-  /** Default color-distance tolerance (0-255-ish) for the click-eraser tool before the user touches the slider. */
-  autoTol?: number;
   /** Which background-removal model the AI tool uses. */
   model?: ModelKey;
   /**
@@ -49,14 +47,6 @@ export interface RemoveBgToolProps {
    */
   storage?: RemoveBgStorage;
 }
-export type Tool = "auto" | "click" | "rect" | "lasso" | "brush";
+export type Tool = "auto" | "click" | "brush";
 export type View = "home" | "editor" | "gallery";
-export type LassoOp = "new" | "add" | "sub";
 export type BrushOp = "add" | "sub";
-
-export interface RectSel {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}

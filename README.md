@@ -11,7 +11,7 @@ npm install github:DGboost/removebg#main
 ```tsx
 import { RemoveBgTool } from "removebg";
 
-<RemoveBgTool accent="#3d5afe" appName="누끼컷" model="ormbg" />
+<RemoveBgTool accent="#000" appName="누끼컷" model="ormbg" />
 ```
 
 `react` and `react-dom` (>=18) are peer dependencies — the host app's own React instance is used.
@@ -20,18 +20,21 @@ import { RemoveBgTool } from "removebg";
 
 | Prop      | Type                                        | Default    | Description                                  |
 | --------- | -------------------------------------------- | ---------- | --------------------------------------------- |
-| `accent`  | `string`                                     | `#3d5afe`  | Brand accent color                            |
+| `accent`  | `string`                                     | `#000`     | Brand accent color                            |
 | `appName` | `string`                                     | `누끼컷`   | Shown as the brand mark's tooltip             |
-| `autoTol` | `number`                                     | `30`       | Default tolerance for the click-eraser tool   |
 | `model`   | `"BiRefNet_lite" \| "ormbg" \| "RMBG-1.4"`   | `ormbg`    | Which ONNX background-removal model to use    |
 
 ## Tools
 
-- **AI 자동 제거** — one-click background removal via an ONNX segmentation model (transformers.js, WASM).
-- **클릭 지우개** — click a background pixel to key out similar colors.
-- **사각형 선택** — drag a rectangle to keep only that region.
-- **스마트 올가미** — draw a rough loop; a magnetic-lasso heuristic snaps it to the real object edge using local color segmentation.
-- **브러시** — paint to add back or erase parts of the current result.
+- **AI 자동 제거** — analyzes the original photo with an ONNX segmentation model (transformers.js, WASM), while preserving transparency from the current edit. Failures leave the current image unchanged and allow retry; no automatic color-key fallback.
+- **객체 선택** — click an object to keep it using `Xenova/slimsam-77-uniform` (q8, WASM). Each click makes a fresh selection from the original. Enable **원본과 비교** to select a different object, then refine with the brush. A single-image embedding cache lets repeated selections reuse the image encoding after the initial model load and encoding.
+- **브러시** — paint to restore original pixels or erase parts of the current result. Restoration does not invent pixels where the original is transparent or repeatedly increase original opacity.
+
+Brush editing displays the original photo with a selection overlay before, during, and after each stroke. Enable **결과 미리보기** to inspect the cutout; drawing is disabled in this preview. Disable it to continue editing on the original. Downloads and gallery saves always use the edited result.
+
+All editing tools export at the original image dimensions and use original RGB. Analysis and manual masks remain capped at a 1200px longest edge; preserving output dimensions does not create finer mask detail. Browser canvas limits still apply. Manual tools wait for image preparation before accepting strokes, and stale operations cannot replace a newly opened image. Owned models and cached embeddings are released on unmount.
+
+`autoTol` is no longer supported; remove this prop from host integrations.
 
 ## Run locally
 
