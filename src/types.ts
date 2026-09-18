@@ -50,3 +50,4 @@ export interface RemoveBgToolProps {
 export type Tool = "auto" | "click" | "brush";
 export type View = "home" | "editor" | "gallery";
 export type BrushOp = "add" | "sub";
+export type ObjectOp = "new" | "add" | "sub";

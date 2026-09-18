@@ -1,6 +1,8 @@
 // Canvas-based cutout engine: pure image-processing logic, independent of React.
 // RemoveBgTool (the component) owns one instance and drives it from event handlers.
 
+import type { ObjectOp } from "./types";
+
 export type ModelKey = "BiRefNet_lite" | "ormbg" | "RMBG-1.4";
 
 export const MODEL_IDS: Record<ModelKey, string> = {
@@ -319,7 +321,7 @@ export class RemoveBgEngine {
       for (let candidate = 0; candidate < scores.data.length; candidate++) {
         const score = Number(scores.data[candidate]);
         const offset = candidate * pixels;
-        if (!Number.isFinite(score) || score < 0.88 ||
+        if (!Number.isFinite(score) || score <= 0 ||
             !mask.data[offset + Math.floor(point[1]) * W + Math.floor(point[0])]) continue;
         if (score > best) {
           best = score;
@@ -347,8 +349,12 @@ export class RemoveBgEngine {
     }
   }
 
-  clickKeep(src: string, pt: Pt, onProgress: (msg: string) => void): Promise<string> {
+  clickKeep(
+    src: string, pt: Pt, currentSrc: string | null, op: ObjectOp, onProgress: (msg: string) => void,
+  ): Promise<string> {
     return this.enqueue(async () => {
+      if (op === "sub" && !currentSrc) throw new Error("제거할 선택이 없습니다. 먼저 객체를 선택해 주세요.");
+      const operation = currentSrc ? op : "new";
       onProgress("클릭 객체 모델 준비 중…");
       const resources = await this.getSam(onProgress);
       const image = await this.samImage(src, resources);
@@ -359,7 +365,8 @@ export class RemoveBgEngine {
       onProgress("클릭한 객체 인식 중…");
       const mask = await this.recognize(image, resources, point);
       const { c } = this.mkCanvas(await this.loadImage(src), Infinity);
-      return this.composite(c, c, mask, "new");
+      const base = operation === "new" ? c : await this.loadImage(currentSrc!);
+      return this.composite(c, base, mask, operation);
     });
   }
 
@@ -519,7 +526,7 @@ export class RemoveBgEngine {
 
   private composite(
     original: HTMLCanvasElement, base: CanvasImageSource,
-    mask: HTMLCanvasElement, op: "new" | "add" | "sub",
+    mask: HTMLCanvasElement, op: ObjectOp,
   ): string {
     const W = original.width, H = original.height;
     const c = document.createElement("canvas");

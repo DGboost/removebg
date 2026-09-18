@@ -8,6 +8,7 @@ import type {
   Tool,
   View,
   BrushOp,
+  ObjectOp,
 } from "./types";
 
 type Pt = [number, number];
@@ -32,6 +33,7 @@ interface State {
   brushPts: Pt[];
   brushSize: number;
   brushOp: BrushOp;
+  objectOp: ObjectOp;
   cursorPos: [number, number] | null;
   dropActive: boolean;
 }
@@ -181,6 +183,7 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
     brushPts: [],
     brushSize: 30,
     brushOp: "add",
+    objectOp: "new",
     cursorPos: null,
     dropActive: false,
   };
@@ -402,6 +405,7 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
       resultSrc: null,
       brushPts: [],
       tool: "auto",
+      objectOp: "new",
       compareOn: false,
     });
   };
@@ -414,8 +418,8 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
   };
 
   // ---------- tools ----------
-  // Auto and manual tools refine the current result. Object clicks start fresh
-  // from the original so another object can be selected without losing pixels.
+  // Object clicks identify an object on the original, then replace, add to, or
+  // subtract from the current result according to the selected mode.
   private setTool = (t: Tool) => {
     if (this.request || this.activePointer !== null) return;
     this.invalidate();
@@ -460,6 +464,11 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
     this.cancelScheduled();
     this.setState({ compareOn: !!e.target.checked, cursorPos: null });
   };
+  private setObjectOp = (objectOp: ObjectOp) => {
+    if (this.request || this.activePointer !== null || this.state.processing || this.state.dragging || this.state.tool !== "click") return;
+    if (objectOp === "sub" && !this.state.resultSrc) return;
+    this.setState({ objectOp });
+  };
   private setBrushAdd = () => {
     if (this.request || this.activePointer !== null || !this.state.manualReady) return;
     this.setState({ brushOp: "add" });
@@ -474,13 +483,14 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
   };
 
   private selectObject = async (pt: Pt) => {
-    const sc = this.state.editorImage;
-    if (!sc || this.request) return;
+    const { editorImage: sc, objectOp, resultSrc } = this.state;
+    if (!sc || this.request || this.activePointer !== null || this.state.processing || this.state.compareOn || this.state.tool !== "click") return;
+    if (objectOp === "sub" && !resultSrc) return;
     const request = Symbol();
     this.request = request;
     this.setState({ processing: true, notice: "", engineMsg: "객체 선택 모델 불러오는 중…" });
     try {
-      const out = await this.engine.clickKeep(sc.photo, pt, (engineMsg) => {
+      const out = await this.engine.clickKeep(sc.photo, pt, resultSrc, objectOp, (engineMsg) => {
         if (this.isCurrent(request)) this.setState({ engineMsg });
       });
       if (!this.isCurrent(request)) return;
@@ -545,7 +555,7 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
       this.paintOverlay();
       this.setState({ dragging: true, brushPts: [[fx, fy]] });
     } else if (t === "click") {
-      if (!this.state.resultSrc || this.state.compareOn) void this.selectObject([fx, fy]);
+      if (!this.state.compareOn && (this.state.objectOp !== "sub" || this.state.resultSrc)) void this.selectObject([fx, fy]);
     }
     try {
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
@@ -776,6 +786,7 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
       resultSrc: cutout || null,
       brushPts: [],
       tool: "auto",
+      objectOp: "new",
       compareOn: false,
     });
   };
@@ -975,8 +986,8 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
     const tool = s.tool;
     const manual = tool === "brush";
     const manualDisabled = !s.manualReady || s.processing || s.dragging;
-    const overlayActive = !!s.editorImage && !s.processing && ((manual && s.manualReady && !s.compareOn) || (tool === "click" && (!s.resultSrc || s.compareOn)));
-    const showingResult = s.processed && (manual ? s.compareOn : !s.compareOn);
+    const overlayActive = !!s.editorImage && !s.processing && !s.compareOn && ((manual && s.manualReady) || (tool === "click" && (s.objectOp !== "sub" || !!s.resultSrc)));
+    const showingResult = s.processed && (tool === "auto" ? !s.compareOn : s.compareOn);
     const stageSrc = showingResult && s.resultSrc ? s.resultSrc : s.editorImage ? s.editorImage.photo : "";
     const primaryEnabled = tool === "auto" && !s.processing;
     const primaryLabel = s.engine === "error" ? "AI 배경 제거 다시 시도" : "AI로 배경 제거";
@@ -1058,7 +1069,18 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
     const modelLabel = MODEL_LABELS[this.props.model || "ormbg"] || "BiRefNet lite";
     const stageCursor = tool === "click" ? "pointer" : tool === "brush" ? "none" : "default";
     const showSelMask = manual && s.manualReady && !s.processing && !s.compareOn;
-    const showClickHint = tool === "click" && !s.processing && (!s.resultSrc || s.compareOn);
+    const showObjectMask = tool === "click" && !!s.resultSrc && !s.compareOn;
+    const showClickHint = tool === "click" && !s.processing && !s.compareOn;
+    const objectGuide = s.objectOp === "new"
+      ? "원본에서 객체를 클릭하면 현재 선택을 새 객체로 바꿔요."
+      : s.objectOp === "add"
+        ? "원본에서 객체를 클릭하면 현재 선택을 유지하며 추가해요. 선택이 없으면 새로 선택해요."
+        : "원본에서 객체를 클릭하면 해당 마스크 영역을 현재 선택에서 빼요. 객체 레이어가 아니므로 겹친 영역도 함께 지워져요.";
+    const objectHint = s.objectOp === "new"
+      ? "새로 남길 객체를 클릭하세요"
+      : s.objectOp === "add"
+        ? "추가로 남길 객체를 클릭하세요"
+        : s.resultSrc ? "선택에서 뺄 객체를 클릭하세요" : "먼저 객체를 새로 선택하거나 추가하세요";
     const showDone = s.processed && !s.processing && !s.notice && !s.manualError && showingResult;
     const showPrimary = !!s.editorImage && tool === "auto";
     const processMsg = s.engineMsg || (tool === "click" ? "클릭한 객체를 분석하는 중…" : tool === "auto" ? "AI로 배경 분석 중…" : "영역을 처리하는 중…");
@@ -1209,7 +1231,21 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
 
             {tool === "click" && (
               <div style={{ marginTop: 12, padding: 14, border: "1px solid var(--rbg-border,#ececec)", borderRadius: 12, background: "var(--rbg-surface,#fff)" }}>
-                <div style={{ fontSize: 12, color: "var(--rbg-text-muted,#4a4a52)", lineHeight: 1.6 }}>SAM으로 남길 객체를 클릭하세요. 다른 객체는 원본과 비교를 켠 뒤 클릭하면 새로 선택돼요. 같은 이미지의 반복 선택은 캐시를 사용해요. 결과는 브러시로 다듬을 수 있어요.</div>
+                <div style={{ display: "flex", gap: 5, marginBottom: 11 }}>
+                  <button disabled={s.processing || s.dragging} onClick={() => this.setObjectOp("new")} title="현재 선택을 클릭한 객체로 바꿔요" style={segStyle(s.objectOp === "new")}>
+                    새로 선택
+                  </button>
+                  <button disabled={s.processing || s.dragging} onClick={() => this.setObjectOp("add")} title="현재 선택을 유지하며 클릭한 객체를 추가해요" style={segStyle(s.objectOp === "add")}>
+                    추가 +
+                  </button>
+                  <button disabled={s.processing || s.dragging || !s.resultSrc} onClick={() => this.setObjectOp("sub")} title="클릭한 객체의 마스크 영역을 빼요. 겹친 영역도 함께 지워져요" style={segStyle(s.objectOp === "sub")}>
+                    빼기 −
+                  </button>
+                </div>
+                <div style={{ fontSize: 12, color: "var(--rbg-text-muted,#4a4a52)", lineHeight: 1.6 }}>
+                  {objectGuide} 같은 이미지의 반복 선택은 캐시를 사용해요. 결과는 브러시로 다듬을 수 있어요.
+                  {s.compareOn && <div style={{ marginTop: 8 }}>결과 미리보기 중에는 선택할 수 없어요. 미리보기를 끄면 원본에서 계속 선택할 수 있어요.</div>}
+                </div>
               </div>
             )}
 
@@ -1246,6 +1282,24 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
                   <canvas
                     ref={this.overlayRef}
                     style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", mixBlendMode: "multiply", opacity: 0.42 }}
+                  />
+                )}
+
+                {showObjectMask && (
+                  <div
+                    style={{
+                      position: "absolute",
+                      inset: 0,
+                      background: "var(--accent)",
+                      opacity: 0.42,
+                      maskImage: `url("${s.resultSrc}")`,
+                      WebkitMaskImage: `url("${s.resultSrc}")`,
+                      maskSize: "100% 100%",
+                      WebkitMaskSize: "100% 100%",
+                      maskRepeat: "no-repeat",
+                      WebkitMaskRepeat: "no-repeat",
+                      pointerEvents: "none",
+                    }}
                   />
                 )}
 
@@ -1295,7 +1349,7 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
                       backdropFilter: "blur(4px)",
                     }}
                   >
-                    원본에서 남길 객체를 클릭하세요
+                    {objectHint}
                   </div>
                 )}
 
@@ -1390,7 +1444,7 @@ export class RemoveBgTool extends React.Component<RemoveBgToolProps, State> {
                   <div style={{ width: 1, height: 26, background: "var(--rbg-border-soft,#ededed)" }}></div>
                   <label style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13, color: "var(--rbg-text-muted,#6b6b72)", cursor: "pointer", userSelect: "none" }}>
                     <input disabled={s.processing || s.dragging} type="checkbox" checked={s.compareOn} onChange={this.toggleCompare} style={{ accentColor: "var(--accent)", width: 15, height: 15 }} />
-                    {manual ? "결과 미리보기" : "원본과 비교"}
+                    {tool === "auto" ? "원본과 비교" : "결과 미리보기"}
                   </label>
                 </>
               )}
